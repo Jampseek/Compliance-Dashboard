@@ -22,6 +22,7 @@ export default function CaseInvestigation() {
   const fileSar = useStore((s) => s.fileSar)
   const closeCase = useStore((s) => s.closeCaseNoAction)
   const addNote = useStore((s) => s.addNote)
+  const sarDraftingCaseId = useStore((s) => s.sarDraftingCaseId)
 
   const [selected, setSelected] = useState<string | null>(null)
   const [note, setNote] = useState('')
@@ -136,13 +137,25 @@ export default function CaseInvestigation() {
                     <select
                       value={regulator}
                       onChange={(e) => setRegulator(e.target.value as 'FinCEN' | 'FCA')}
-                      className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+                      disabled={sarDraftingCaseId === current.id}
+                      className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-200 disabled:opacity-40"
                     >
                       <option value="FinCEN">FinCEN (US)</option>
                       <option value="FCA">FCA (UK)</option>
                     </select>
-                    <Button variant="primary" onClick={() => draftSar(current.id, regulator)}>
-                      Draft SAR with GPT-4o
+                    <Button
+                      variant="primary"
+                      disabled={sarDraftingCaseId === current.id}
+                      onClick={() => draftSar(current.id, regulator)}
+                    >
+                      {sarDraftingCaseId === current.id ? (
+                        <span className="flex items-center gap-2">
+                          <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                          Generating SAR…
+                        </span>
+                      ) : (
+                        'Generate SAR with AI'
+                      )}
                     </Button>
                   </div>
                 )}
