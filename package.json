@@ -1,0 +1,9 @@
+{
+  "name": "compliance-dashboard",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix demos/ai-compliance-command-center",
+    "build": "npm run build --prefix demos/ai-compliance-command-center",
+    "preview": "npm run preview --prefix demos/ai-compliance-command-center"
+  }
+}
