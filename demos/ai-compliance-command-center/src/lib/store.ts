@@ -18,7 +18,7 @@ import type { Alert, AuditEntry, Case, Transaction } from './types'
 import { makeTransaction } from './mockData'
 import { screen } from './screening'
 import { assess } from './riskEngine'
-import { draftSar } from './sarDrafter'
+import { draftSarAI } from './aiSarDrafter'
 import { appendAudit } from './audit'
 import { id } from './random'
 import { PRINCIPALS, type Role } from './rbac'
@@ -61,7 +61,8 @@ interface State {
   clearAlert: (alertId: string) => void
   escalateAlert: (alertId: string) => void
   addNote: (caseId: string, note: string) => void
-  draftSarForCase: (caseId: string, regulator: 'FinCEN' | 'FCA') => void
+  sarDraftingCaseId: string | null
+  draftSarForCase: (caseId: string, regulator: 'FinCEN' | 'FCA') => Promise<void>
   approveSar: (caseId: string) => void
   fileSar: (caseId: string) => void
   closeCaseNoAction: (caseId: string) => void
@@ -77,6 +78,7 @@ export const useStore = create<State>((set, get) => ({
   cases: [],
   audit: [],
   stats: { ingested: 0, autoCleared: 0 },
+  sarDraftingCaseId: null,
 
   setRole: (r) => set({ role: r }),
 
@@ -179,22 +181,28 @@ export const useStore = create<State>((set, get) => ({
     }))
   },
 
-  draftSarForCase: (caseId, regulator) => {
-    set((s) => {
-      const c = s.cases.find((x) => x.id === caseId)
-      if (!c) return s
+  draftSarForCase: async (caseId, regulator) => {
+    const c = get().cases.find((x) => x.id === caseId)
+    if (!c) return
+    set({ sarDraftingCaseId: caseId })
+    try {
       const now = Date.now()
-      const sar = draftSar(c, now, regulator)
+      const sar = await draftSarAI(c, now, regulator)
       const ts = new Date(now).toISOString()
-      const audit = [...s.audit]
-      audit.push(appendAudit(audit, 'sar_drafted', 'system:sar-ai', caseId, sar.id, ts))
-      return {
-        cases: s.cases.map((x) =>
-          x.id === caseId ? { ...x, sar, status: 'pending_approval' } : x,
-        ),
-        audit,
-      }
-    })
+      set((s) => {
+        const audit = [...s.audit]
+        audit.push(appendAudit(audit, 'sar_drafted', 'system:sar-ai', caseId, sar.id, ts))
+        return {
+          cases: s.cases.map((x) =>
+            x.id === caseId ? { ...x, sar, status: 'pending_approval' } : x,
+          ),
+          audit,
+          sarDraftingCaseId: null,
+        }
+      })
+    } catch {
+      set({ sarDraftingCaseId: null })
+    }
   },
 
   approveSar: (caseId) => {
