@@ -8,6 +8,7 @@ import {
   BarChart3,
   Bell,
   FileSearch,
+  Newspaper,
   Pause,
   Play,
   Radio,
@@ -25,6 +26,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { to: '/screening', label: 'Screening Monitor', icon: Radio, zone: 'AI Detection' },
+  { to: '/media', label: 'Adverse Media', icon: Newspaper, zone: 'AI Detection' },
   { to: '/alerts', label: 'Alert Queue', icon: Bell, zone: 'Orchestration' },
   { to: '/analyst', label: 'Analyst Dashboard', icon: Activity, zone: 'Human Oversight' },
   { to: '/cases', label: 'Case Investigation', icon: FileSearch, zone: 'Human Oversight' },
@@ -62,7 +64,9 @@ export default function Layout() {
     }
   }, [role, location.pathname, navigate])
 
+  const mediaHits = useStore((s) => s.mediaHits)
   const openAlerts = alerts.filter((a) => a.status === 'triaged' || a.status === 'in_review').length
+  const newMediaHits = mediaHits.filter((h) => h.status === 'new').length
 
   return (
     <div className="flex h-full">
@@ -98,6 +102,11 @@ export default function Layout() {
                 {item.to === '/alerts' && openAlerts > 0 && (
                   <span className="rounded-full bg-rose-500/20 px-1.5 text-xs text-rose-300">
                     {openAlerts}
+                  </span>
+                )}
+                {item.to === '/media' && newMediaHits > 0 && (
+                  <span className="rounded-full bg-rose-500/20 px-1.5 text-xs text-rose-300">
+                    {newMediaHits}
                   </span>
                 )}
               </NavLink>

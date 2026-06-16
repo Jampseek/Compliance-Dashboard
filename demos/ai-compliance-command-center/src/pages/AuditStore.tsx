@@ -19,6 +19,10 @@ const actionColor: Record<AuditAction, string> = {
   sar_approved: 'text-emerald-400',
   sar_filed: 'text-emerald-300',
   case_closed: 'text-slate-400',
+  media_hit_detected: 'text-orange-400',
+  media_hit_reviewed: 'text-amber-400',
+  media_hit_dismissed: 'text-slate-400',
+  media_hit_escalated: 'text-rose-400',
 }
 
 export default function AuditStore() {

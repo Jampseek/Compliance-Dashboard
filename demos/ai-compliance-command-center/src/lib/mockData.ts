@@ -1,7 +1,7 @@
 // Generates synthetic banking transactions that stand in for the feed coming
 // from the Core Banking System over Kafka / Azure Event Hubs.
 
-import type { Transaction, TxnType } from './types'
+import type { AdverseMediaHit, MediaCategory, Transaction, TxnType } from './types'
 import { id, intRange, pick, range, rng } from './random'
 
 const NAMES = [
@@ -56,6 +56,92 @@ export function makeTransaction(now: number): Transaction {
     originatorCountry: country(highRiskBias),
     beneficiaryCountry: country(highRiskBias),
     channel: pick(CHANNELS),
+  }
+}
+
+// ── Adverse Media ─────────────────────────────────────────────────────────────
+
+const MEDIA_SOURCES = [
+  'Reuters',
+  'BBC News',
+  'FCA Enforcement',
+  'OFAC Notices',
+  'FinCEN Advisories',
+  'Court Records',
+  'Financial Times',
+  'Global Witness',
+  'Transparency International',
+]
+
+const MEDIA_CATEGORIES: MediaCategory[] = [
+  'fraud',
+  'corruption',
+  'sanctions',
+  'money_laundering',
+  'legal',
+  'regulatory',
+]
+
+const HEADLINES: Record<MediaCategory, string[]> = {
+  fraud: [
+    '{entity} under investigation for alleged fraud scheme',
+    'Authorities probe {entity} over financial irregularities',
+    '{entity} named in multi-million dollar fraud case',
+    'Fraud task force seizes assets linked to {entity}',
+  ],
+  corruption: [
+    '{entity} linked to bribery allegations in procurement deal',
+    'Anti-corruption watchdog flags {entity} for review',
+    '{entity} executives face corruption charges',
+    'Whistleblower documents name {entity} in kickback scheme',
+  ],
+  sanctions: [
+    '{entity} added to sanctions watch list pending review',
+    'Regulator issues advisory on transactions involving {entity}',
+    '{entity} flagged in new OFAC guidance document',
+    'UN panel identifies {entity} as sanctions-risk entity',
+  ],
+  money_laundering: [
+    '{entity} accounts frozen amid money laundering probe',
+    'AML task force opens inquiry into {entity}',
+    '{entity} cited in anti-money laundering enforcement action',
+    'Shell company network traced back to {entity}',
+  ],
+  legal: [
+    '{entity} named as defendant in civil litigation',
+    'Court documents reveal {entity} faces asset freeze order',
+    '{entity} subject to injunction in ongoing legal proceedings',
+    'Judgment entered against {entity} for undisclosed liabilities',
+  ],
+  regulatory: [
+    'Regulator censures {entity} for compliance failures',
+    '{entity} receives formal warning from financial watchdog',
+    'FCA opens enforcement proceedings against {entity}',
+    '{entity} fined for repeated AML control breaches',
+  ],
+}
+
+/**
+ * Simulate the NLP engine surfacing a negative-news hit on a known entity.
+ * Returns null ~70% of the time to model realistic signal density.
+ */
+export function makeMediaHit(now: number): AdverseMediaHit | null {
+  if (rng() > 0.28) return null
+  const entityName = pick(NAMES)
+  const category = pick(MEDIA_CATEGORIES)
+  const source = pick(MEDIA_SOURCES)
+  const headline = pick(HEADLINES[category]).replace('{entity}', entityName)
+  const confidence = 50 + Math.round(rng() * 49) // 50–99
+  return {
+    id: id('media'),
+    detectedAt: new Date(now).toISOString(),
+    entityName,
+    source,
+    headline,
+    sentiment: confidence >= 78 ? 'highly_negative' : 'negative',
+    confidence,
+    category,
+    status: 'new',
   }
 }
 
