@@ -7,6 +7,7 @@ import CaseInvestigation from './pages/CaseInvestigation'
 import ExecutiveDashboard from './pages/ExecutiveDashboard'
 import AuditStore from './pages/AuditStore'
 import AdverseMediaMonitor from './pages/AdverseMediaMonitor'
+import KYCReporting from './pages/KYCReporting'
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/cases" element={<CaseInvestigation />} />
           <Route path="/executive" element={<ExecutiveDashboard />} />
           <Route path="/media" element={<AdverseMediaMonitor />} />
+          <Route path="/kyc" element={<KYCReporting />} />
           <Route path="/audit" element={<AuditStore />} />
           <Route path="*" element={<Navigate to="/screening" replace />} />
         </Route>

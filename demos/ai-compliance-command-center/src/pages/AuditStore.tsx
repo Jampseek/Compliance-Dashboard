@@ -23,6 +23,9 @@ const actionColor: Record<AuditAction, string> = {
   media_hit_reviewed: 'text-amber-400',
   media_hit_dismissed: 'text-slate-400',
   media_hit_escalated: 'text-rose-400',
+  ctr_generated: 'text-sky-400',
+  str_generated: 'text-violet-400',
+  kyc_report_submitted: 'text-emerald-300',
 }
 
 export default function AuditStore() {

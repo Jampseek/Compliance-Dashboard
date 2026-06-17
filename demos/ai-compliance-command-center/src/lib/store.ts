@@ -14,7 +14,7 @@
 // so the demo runs with zero backend setup.
 
 import { create } from 'zustand'
-import type { AdverseMediaHit, Alert, AuditEntry, Case, Transaction } from './types'
+import type { AdverseMediaHit, Alert, AuditEntry, Case, KycRegulator, KycReport, Transaction } from './types'
 import { makeMediaHit, makeTransaction } from './mockData'
 import { screen } from './screening'
 import { assess } from './riskEngine'
@@ -22,6 +22,68 @@ import { draftSarAI } from './aiSarDrafter'
 import { appendAudit } from './audit'
 import { id } from './random'
 import { PRINCIPALS, type Role } from './rbac'
+
+// ── KYC Report helpers ────────────────────────────────────────────────────────
+
+function pickRegulator(txn: Transaction): KycRegulator {
+  const cc = [txn.originatorCountry, txn.beneficiaryCountry]
+  if (cc.includes('GB')) return 'FCA'
+  if (cc.includes('AU')) return 'AUSTRAC'
+  if (cc.includes('SG')) return 'MAS'
+  return 'FinCEN'
+}
+
+function makeCtr(txn: Transaction, now: number): KycReport {
+  return {
+    id: id('ctr'),
+    type: 'CTR',
+    status: 'pending',
+    generatedAt: new Date(now).toISOString(),
+    deadlineAt: new Date(now + 15 * 24 * 60 * 60 * 1000).toISOString(),
+    regulator: pickRegulator(txn),
+    customer: txn.originator,
+    transactionId: txn.id,
+    prePopulated: {
+      customerName: txn.originator,
+      beneficiary: txn.beneficiary,
+      transactionDate: txn.timestamp,
+      amount: txn.amount,
+      currency: txn.currency,
+      transactionType: txn.type,
+      originatingCountry: txn.originatorCountry,
+      beneficiaryCountry: txn.beneficiaryCountry,
+      channel: txn.channel,
+    },
+  }
+}
+
+function makeStr(c: Case, now: number): KycReport {
+  const txn = c.alert.transaction
+  return {
+    id: id('str'),
+    type: 'STR',
+    status: 'pending',
+    generatedAt: new Date(now).toISOString(),
+    deadlineAt: new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    regulator: pickRegulator(txn),
+    customer: txn.originator,
+    transactionId: txn.id,
+    caseId: c.id,
+    prePopulated: {
+      customerName: txn.originator,
+      beneficiary: txn.beneficiary,
+      transactionDate: txn.timestamp,
+      amount: txn.amount,
+      currency: txn.currency,
+      transactionType: txn.type,
+      originatingCountry: txn.originatorCountry,
+      beneficiaryCountry: txn.beneficiaryCountry,
+      channel: txn.channel,
+    },
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function triage(alert: Alert): { priority: number; summary: string } {
   const s = alert.assessment.score
@@ -54,6 +116,7 @@ interface State {
   alerts: Alert[]
   cases: Case[]
   mediaHits: AdverseMediaHit[]
+  kycReports: KycReport[]
   audit: AuditEntry[]
   stats: PipelineStats
 
@@ -70,6 +133,7 @@ interface State {
   reviewMediaHit: (hitId: string) => void
   dismissMediaHit: (hitId: string) => void
   escalateMediaHit: (hitId: string) => void
+  submitKycReport: (reportId: string) => void
   reset: () => void
 }
 
@@ -81,6 +145,7 @@ export const useStore = create<State>((set, get) => ({
   alerts: [],
   cases: [],
   mediaHits: [],
+  kycReports: [],
   audit: [],
   stats: { ingested: 0, autoCleared: 0 },
   sarDraftingCaseId: null,
@@ -93,6 +158,7 @@ export const useStore = create<State>((set, get) => ({
     const hits = screen(txn)
     const assessment = assess(txn, hits)
     const mediaHit = makeMediaHit(now)
+    const ctr = txn.amount >= 10000 ? makeCtr(txn, now) : null
 
     set((s) => {
       const audit = [...s.audit]
@@ -112,6 +178,13 @@ export const useStore = create<State>((set, get) => ({
         mediaHits.unshift(mediaHit)
       }
 
+      // CTR — generated for any transaction >= $10,000 regardless of risk band.
+      const kycReports = [...s.kycReports]
+      if (ctr) {
+        audit.push(appendAudit(audit, 'ctr_generated', 'system:kyc-reporting', ctr.id, `${txn.currency} ${txn.amount}`, ts))
+        kycReports.unshift(ctr)
+      }
+
       // Low risk -> auto-cleared with an audit record (diagram: D ->|Low Risk| G).
       if (assessment.band === 'low') {
         audit.push(
@@ -121,6 +194,7 @@ export const useStore = create<State>((set, get) => ({
           transactions: [txn, ...s.transactions].slice(0, 200),
           stats: { ...stats, autoCleared: stats.autoCleared + 1 },
           mediaHits,
+          kycReports,
           audit,
         }
       }
@@ -146,6 +220,7 @@ export const useStore = create<State>((set, get) => ({
         transactions: [txn, ...s.transactions].slice(0, 200),
         alerts: [alert, ...s.alerts],
         mediaHits,
+        kycReports,
         stats,
         audit,
       }
@@ -205,14 +280,17 @@ export const useStore = create<State>((set, get) => ({
     try {
       const now = Date.now()
       const sar = await draftSarAI(c, now, regulator)
+      const str = makeStr(c, now)
       const ts = new Date(now).toISOString()
       set((s) => {
         const audit = [...s.audit]
         audit.push(appendAudit(audit, 'sar_drafted', 'system:sar-ai', caseId, sar.id, ts))
+        audit.push(appendAudit(audit, 'str_generated', 'system:kyc-reporting', str.id, `linked to ${caseId}`, ts))
         return {
           cases: s.cases.map((x) =>
             x.id === caseId ? { ...x, sar, status: 'pending_approval' } : x,
           ),
+          kycReports: [str, ...s.kycReports],
           audit,
           sarDraftingCaseId: null,
         }
@@ -324,12 +402,31 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
+  submitKycReport: (reportId) => {
+    const actor = PRINCIPALS[get().role].name
+    set((s) => {
+      const report = s.kycReports.find((r) => r.id === reportId)
+      if (!report || report.status === 'submitted') return s
+      const ts = new Date().toISOString()
+      const ref = `${report.regulator}-${report.type}-${id('ref').toUpperCase()}`
+      const audit = [...s.audit]
+      audit.push(appendAudit(audit, 'kyc_report_submitted', actor, reportId, ref, ts))
+      return {
+        kycReports: s.kycReports.map((r) =>
+          r.id === reportId ? { ...r, status: 'submitted', submittedAt: ts, filingReference: ref } : r,
+        ),
+        audit,
+      }
+    })
+  },
+
   reset: () =>
     set({
       transactions: [],
       alerts: [],
       cases: [],
       mediaHits: [],
+      kycReports: [],
       audit: [],
       stats: { ingested: 0, autoCleared: 0 },
     }),
