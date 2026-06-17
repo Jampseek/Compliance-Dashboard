@@ -103,6 +103,7 @@ export interface AdverseMediaHit {
   confidence: number // 0-100 NLP match confidence
   category: MediaCategory
   status: MediaHitStatus
+  url: string
   reviewedBy?: string
 }
 

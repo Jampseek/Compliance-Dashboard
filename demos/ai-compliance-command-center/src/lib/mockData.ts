@@ -73,6 +73,18 @@ const MEDIA_SOURCES = [
   'Transparency International',
 ]
 
+const MEDIA_SOURCE_URLS: Record<string, string> = {
+  'Reuters':                   'https://www.reuters.com/legal/litigation',
+  'BBC News':                  'https://www.bbc.co.uk/news/business',
+  'FCA Enforcement':           'https://www.fca.org.uk/news/press-releases',
+  'OFAC Notices':              'https://ofac.treasury.gov/recent-actions',
+  'FinCEN Advisories':         'https://www.fincen.gov/resources/advisories',
+  'Court Records':             'https://www.courtlistener.com/docket',
+  'Financial Times':           'https://www.ft.com/companies/enforcement',
+  'Global Witness':            'https://www.globalwitness.org/en/campaigns',
+  'Transparency International': 'https://www.transparency.org/en/news',
+}
+
 const MEDIA_CATEGORIES: MediaCategory[] = [
   'fraud',
   'corruption',
@@ -132,11 +144,15 @@ export function makeMediaHit(now: number): AdverseMediaHit | null {
   const source = pick(MEDIA_SOURCES)
   const headline = pick(HEADLINES[category]).replace('{entity}', entityName)
   const confidence = 50 + Math.round(rng() * 49) // 50–99
+  const slug = entityName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  const ref = Math.floor(rng() * 0xffffff).toString(16).padStart(6, '0')
+  const baseUrl = MEDIA_SOURCE_URLS[source]
   return {
     id: id('media'),
     detectedAt: new Date(now).toISOString(),
     entityName,
     source,
+    url: `${baseUrl}/${slug}-${ref}`,
     headline,
     sentiment: confidence >= 78 ? 'highly_negative' : 'negative',
     confidence,

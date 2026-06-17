@@ -176,6 +176,16 @@ export default function AdverseMediaMonitor() {
                 <div className="rounded-lg bg-slate-800/40 p-3">
                   <div className="text-xs uppercase text-slate-500">Source</div>
                   <div className="mt-1 text-sm font-semibold text-slate-200">{current.source}</div>
+                  {current.url && (
+                    <a
+                      href={current.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1 block truncate text-xs text-sky-400 hover:text-sky-300 hover:underline"
+                    >
+                      {current.url}
+                    </a>
+                  )}
                 </div>
                 <div className="rounded-lg bg-slate-800/40 p-3">
                   <div className="text-xs uppercase text-slate-500">Category</div>
