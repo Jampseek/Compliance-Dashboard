@@ -82,6 +82,31 @@ export interface SarDraft {
   filingReference?: string
 }
 
+export type MediaCategory =
+  | 'fraud'
+  | 'corruption'
+  | 'sanctions'
+  | 'money_laundering'
+  | 'legal'
+  | 'regulatory'
+
+export type MediaHitStatus = 'new' | 'under_review' | 'dismissed' | 'escalated'
+
+/** A negative-news match surfaced by the NLP adverse-media scanning engine. */
+export interface AdverseMediaHit {
+  id: string
+  detectedAt: string
+  entityName: string
+  source: string
+  headline: string
+  sentiment: 'negative' | 'highly_negative'
+  confidence: number // 0-100 NLP match confidence
+  category: MediaCategory
+  status: MediaHitStatus
+  url: string
+  reviewedBy?: string
+}
+
 export type AuditAction =
   | 'transaction_ingested'
   | 'auto_cleared'
@@ -94,6 +119,10 @@ export type AuditAction =
   | 'sar_approved'
   | 'sar_filed'
   | 'case_closed'
+  | 'media_hit_detected'
+  | 'media_hit_reviewed'
+  | 'media_hit_dismissed'
+  | 'media_hit_escalated'
 
 /** An append-only record destined for the Azure Blob Immutable Audit Store. */
 export interface AuditEntry {
