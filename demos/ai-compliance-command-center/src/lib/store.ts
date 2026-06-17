@@ -14,8 +14,8 @@
 // so the demo runs with zero backend setup.
 
 import { create } from 'zustand'
-import type { AdverseMediaHit, Alert, AuditEntry, Case, Transaction } from './types'
-import { makeMediaHit, makeTransaction } from './mockData'
+import type { Alert, AuditEntry, Case, Transaction } from './types'
+import { makeTransaction } from './mockData'
 import { screen } from './screening'
 import { assess } from './riskEngine'
 import { draftSarAI } from './aiSarDrafter'
@@ -53,7 +53,6 @@ interface State {
   transactions: Transaction[]
   alerts: Alert[]
   cases: Case[]
-  mediaHits: AdverseMediaHit[]
   audit: AuditEntry[]
   stats: PipelineStats
 
@@ -67,9 +66,6 @@ interface State {
   approveSar: (caseId: string) => void
   fileSar: (caseId: string) => void
   closeCaseNoAction: (caseId: string) => void
-  reviewMediaHit: (hitId: string) => void
-  dismissMediaHit: (hitId: string) => void
-  escalateMediaHit: (hitId: string) => void
   reset: () => void
 }
 
@@ -80,7 +76,6 @@ export const useStore = create<State>((set, get) => ({
   transactions: [],
   alerts: [],
   cases: [],
-  mediaHits: [],
   audit: [],
   stats: { ingested: 0, autoCleared: 0 },
   sarDraftingCaseId: null,
@@ -92,7 +87,6 @@ export const useStore = create<State>((set, get) => ({
     const txn = makeTransaction(now)
     const hits = screen(txn)
     const assessment = assess(txn, hits)
-    const mediaHit = makeMediaHit(now)
 
     set((s) => {
       const audit = [...s.audit]
@@ -103,15 +97,6 @@ export const useStore = create<State>((set, get) => ({
 
       const stats = { ...s.stats, ingested: s.stats.ingested + 1 }
 
-      // Adverse media hit — independent of transaction risk band.
-      const mediaHits = [...s.mediaHits]
-      if (mediaHit) {
-        audit.push(
-          appendAudit(audit, 'media_hit_detected', 'system:nlp-media-scanner', mediaHit.id, mediaHit.entityName, ts),
-        )
-        mediaHits.unshift(mediaHit)
-      }
-
       // Low risk -> auto-cleared with an audit record (diagram: D ->|Low Risk| G).
       if (assessment.band === 'low') {
         audit.push(
@@ -120,7 +105,6 @@ export const useStore = create<State>((set, get) => ({
         return {
           transactions: [txn, ...s.transactions].slice(0, 200),
           stats: { ...stats, autoCleared: stats.autoCleared + 1 },
-          mediaHits,
           audit,
         }
       }
@@ -145,7 +129,6 @@ export const useStore = create<State>((set, get) => ({
       return {
         transactions: [txn, ...s.transactions].slice(0, 200),
         alerts: [alert, ...s.alerts],
-        mediaHits,
         stats,
         audit,
       }
@@ -275,61 +258,11 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
-  reviewMediaHit: (hitId) => {
-    const actor = PRINCIPALS[get().role].name
-    set((s) => {
-      const ts = new Date().toISOString()
-      const audit = [...s.audit]
-      audit.push(appendAudit(audit, 'media_hit_reviewed', actor, hitId, 'under review', ts))
-      return {
-        mediaHits: s.mediaHits.map((h) =>
-          h.id === hitId ? { ...h, status: 'under_review', reviewedBy: actor } : h,
-        ),
-        audit,
-      }
-    })
-  },
-
-  dismissMediaHit: (hitId) => {
-    const actor = PRINCIPALS[get().role].name
-    set((s) => {
-      const ts = new Date().toISOString()
-      const audit = [...s.audit]
-      audit.push(appendAudit(audit, 'media_hit_dismissed', actor, hitId, 'false positive', ts))
-      return {
-        mediaHits: s.mediaHits.map((h) =>
-          h.id === hitId ? { ...h, status: 'dismissed', reviewedBy: actor } : h,
-        ),
-        audit,
-      }
-    })
-  },
-
-  escalateMediaHit: (hitId) => {
-    const actor = PRINCIPALS[get().role].name
-    set((s) => {
-      const hit = s.mediaHits.find((h) => h.id === hitId)
-      if (!hit) return s
-      const ts = new Date().toISOString()
-      const audit = [...s.audit]
-      audit.push(
-        appendAudit(audit, 'media_hit_escalated', actor, hitId, `CDD review — ${hit.entityName}`, ts),
-      )
-      return {
-        mediaHits: s.mediaHits.map((h) =>
-          h.id === hitId ? { ...h, status: 'escalated', reviewedBy: actor } : h,
-        ),
-        audit,
-      }
-    })
-  },
-
   reset: () =>
     set({
       transactions: [],
       alerts: [],
       cases: [],
-      mediaHits: [],
       audit: [],
       stats: { ingested: 0, autoCleared: 0 },
     }),
