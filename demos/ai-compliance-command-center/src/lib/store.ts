@@ -57,6 +57,30 @@ function makeCtr(txn: Transaction, now: number): KycReport {
   }
 }
 
+function makeStrFromTxn(txn: Transaction, now: number): KycReport {
+  return {
+    id: id('str'),
+    type: 'STR',
+    status: 'pending',
+    generatedAt: new Date(now).toISOString(),
+    deadlineAt: new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    regulator: pickRegulator(txn),
+    customer: txn.originator,
+    transactionId: txn.id,
+    prePopulated: {
+      customerName: txn.originator,
+      beneficiary: txn.beneficiary,
+      transactionDate: txn.timestamp,
+      amount: txn.amount,
+      currency: txn.currency,
+      transactionType: txn.type,
+      originatingCountry: txn.originatorCountry,
+      beneficiaryCountry: txn.beneficiaryCountry,
+      channel: txn.channel,
+    },
+  }
+}
+
 function makeStr(c: Case, now: number): KycReport {
   const txn = c.alert.transaction
   return {
@@ -159,6 +183,7 @@ export const useStore = create<State>((set, get) => ({
     const assessment = assess(txn, hits)
     const mediaHit = makeMediaHit(now)
     const ctr = txn.amount >= 10000 ? makeCtr(txn, now) : null
+    const autoStr = assessment.band === 'high' ? makeStrFromTxn(txn, now) : null
 
     set((s) => {
       const audit = [...s.audit]
@@ -179,10 +204,15 @@ export const useStore = create<State>((set, get) => ({
       }
 
       // CTR — generated for any transaction >= $10,000 regardless of risk band.
+      // STR — auto-generated for high-risk transactions by the KYC reporting engine.
       const kycReports = [...s.kycReports]
       if (ctr) {
         audit.push(appendAudit(audit, 'ctr_generated', 'system:kyc-reporting', ctr.id, `${txn.currency} ${txn.amount}`, ts))
         kycReports.unshift(ctr)
+      }
+      if (autoStr) {
+        audit.push(appendAudit(audit, 'str_generated', 'system:kyc-reporting', autoStr.id, `high-risk txn ${txn.id}`, ts))
+        kycReports.unshift(autoStr)
       }
 
       // Low risk -> auto-cleared with an audit record (diagram: D ->|Low Risk| G).
