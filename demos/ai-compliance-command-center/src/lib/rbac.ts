@@ -24,19 +24,19 @@ export const ROLES: RoleDefinition[] = [
     role: 'analyst',
     label: 'Compliance Analyst',
     description: 'Reviews triaged alerts, clears false positives, escalates to cases.',
-    permissions: ['/screening', '/alerts', '/analyst', '/audit'],
+    permissions: ['/screening', '/media', '/alerts', '/analyst', '/kyc', '/audit'],
   },
   {
     role: 'investigator',
     label: 'Case Investigator',
     description: 'Investigates escalated cases, drafts SARs, manages the approval gate.',
-    permissions: ['/screening', '/alerts', '/analyst', '/cases', '/audit'],
+    permissions: ['/screening', '/media', '/alerts', '/analyst', '/cases', '/kyc', '/audit'],
   },
   {
     role: 'executive',
     label: 'Executive / MLRO',
     description: 'Oversees program KPIs and the immutable audit trail.',
-    permissions: ['/executive', '/audit'],
+    permissions: ['/executive', '/kyc', '/audit'],
   },
 ]
 

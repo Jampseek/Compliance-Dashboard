@@ -82,6 +82,61 @@ export interface SarDraft {
   filingReference?: string
 }
 
+export type MediaCategory =
+  | 'fraud'
+  | 'corruption'
+  | 'sanctions'
+  | 'money_laundering'
+  | 'legal'
+  | 'regulatory'
+
+export type MediaHitStatus = 'new' | 'under_review' | 'dismissed' | 'escalated'
+
+/** A negative-news match surfaced by the NLP adverse-media scanning engine. */
+export interface AdverseMediaHit {
+  id: string
+  detectedAt: string
+  entityName: string
+  source: string
+  headline: string
+  sentiment: 'negative' | 'highly_negative'
+  confidence: number // 0-100 NLP match confidence
+  category: MediaCategory
+  status: MediaHitStatus
+  url: string
+  reviewedBy?: string
+}
+
+export type KycReportType = 'CTR' | 'STR'
+export type KycReportStatus = 'pending' | 'submitted' | 'overdue'
+export type KycRegulator = 'FinCEN' | 'FCA' | 'AUSTRAC' | 'MAS'
+
+/** An auto-generated regulatory report (CTR or STR) pre-populated from KYC/transaction data. */
+export interface KycReport {
+  id: string
+  type: KycReportType
+  status: KycReportStatus
+  generatedAt: string
+  deadlineAt: string       // ISO — 15 days (CTR) or 30 days (STR) from generation
+  submittedAt?: string
+  filingReference?: string
+  regulator: KycRegulator
+  customer: string         // originator name from KYC record
+  transactionId: string
+  caseId?: string          // linked case for STR
+  prePopulated: {
+    customerName: string
+    beneficiary: string
+    transactionDate: string
+    amount: number
+    currency: string
+    transactionType: string
+    originatingCountry: string
+    beneficiaryCountry: string
+    channel: string
+  }
+}
+
 export type AuditAction =
   | 'transaction_ingested'
   | 'auto_cleared'
@@ -94,6 +149,13 @@ export type AuditAction =
   | 'sar_approved'
   | 'sar_filed'
   | 'case_closed'
+  | 'media_hit_detected'
+  | 'media_hit_reviewed'
+  | 'media_hit_dismissed'
+  | 'media_hit_escalated'
+  | 'ctr_generated'
+  | 'str_generated'
+  | 'kyc_report_submitted'
 
 /** An append-only record destined for the Azure Blob Immutable Audit Store. */
 export interface AuditEntry {
