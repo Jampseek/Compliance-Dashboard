@@ -5,7 +5,7 @@
 // eliminating the final manual step in the compliance chain.
 import { useState } from 'react'
 import { useStore } from '../lib/store'
-import { Button, Card, Empty, PageHeader, Stat } from '../components/ui'
+import { Card, Empty, PageHeader, Stat } from '../components/ui'
 import { clock, money } from '../lib/format'
 import type { KycReport, KycReportType } from '../lib/types'
 
@@ -54,6 +54,11 @@ function DeadlinePill({ deadlineAt }: { deadlineAt: string }) {
 export default function KYCReporting() {
   const reports = useStore((s) => s.kycReports)
   const submitReport = useStore((s) => s.submitKycReport)
+  const role = useStore((s) => s.role)
+
+  // TIER 4 GOVERNANCE GATE: Enforcement of Human-in-the-Loop Regulatory Submission Controls
+  // Only the Executive / MLRO role carries filing authority.
+  const hasFilingAuthority = role === 'executive'
 
   const [selected, setSelected] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<KycReportType | 'all'>('all')
@@ -225,26 +230,44 @@ export default function KYCReporting() {
                   </div>
                 </Card>
 
-                {/* Actions */}
-                <Card className="p-4">
-                  {status === 'submitted' ? (
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm text-emerald-300">
-                        ✓ Submitted to {current.regulator} · ref {current.filingReference}
-                      </span>
-                      <span className="text-xs text-slate-500">{current.submittedAt && clock(current.submittedAt)}</span>
+                {/* TIER 4 GOVERNANCE GATE — Regulatory Submission Controls */}
+                <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-medium text-slate-300">Regulatory Submission Gate</p>
+                      {status === 'submitted' ? (
+                        <p className="mt-1 text-xs text-emerald-400">
+                          ✓ Submitted to {current.regulator} · ref {current.filingReference}
+                          {current.submittedAt && ` · ${clock(current.submittedAt)}`}
+                        </p>
+                      ) : !hasFilingAuthority ? (
+                        <p className="mt-1 text-xs text-amber-500">
+                          ⚠️ Tier 4 Restrained: Requires Executive / MLRO authorisation to file.
+                        </p>
+                      ) : status === 'overdue' ? (
+                        <p className="mt-1 text-xs text-rose-400">⚠ Past deadline — submit immediately</p>
+                      ) : null}
                     </div>
-                  ) : (
-                    <div className="flex items-center gap-3">
-                      {status === 'overdue' && (
-                        <span className="text-sm text-rose-300">⚠ Past deadline — submit immediately</span>
-                      )}
-                      <Button variant="primary" onClick={() => submitReport(current.id)}>
-                        Submit to {current.regulator} →
-                      </Button>
-                    </div>
-                  )}
-                </Card>
+
+                    <button
+                      disabled={!hasFilingAuthority || status === 'submitted'}
+                      onClick={() => submitReport(current.id)}
+                      className={`shrink-0 rounded-md px-4 py-2 text-sm font-semibold transition-all ${
+                        status === 'submitted'
+                          ? 'cursor-default bg-emerald-600/20 text-emerald-300'
+                          : hasFilingAuthority
+                          ? 'cursor-pointer bg-sky-600 text-white shadow-lg hover:bg-sky-500'
+                          : 'cursor-not-allowed border border-slate-700 bg-slate-800 text-slate-500'
+                      }`}
+                    >
+                      {status === 'submitted'
+                        ? 'Filed'
+                        : hasFilingAuthority
+                        ? `Confirm & File with ${current.regulator} →`
+                        : 'Pending MLRO Review'}
+                    </button>
+                  </div>
+                </div>
               </div>
             )
           })()}
