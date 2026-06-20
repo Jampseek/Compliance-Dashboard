@@ -3,7 +3,7 @@
 // and court records for negative mentions of known customer entities.
 // Hits appear here in real-time for analyst review, replacing periodic manual
 // re-screening with continuous, event-driven monitoring.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../lib/store'
 import { Button, Card, Empty, PageHeader, Stat } from '../components/ui'
 import { clock, timeAgo } from '../lib/format'
@@ -48,9 +48,35 @@ function CategoryBadge({ category }: { category: MediaCategory }) {
 //   - Top-level navigation  (no allow-top-navigation)
 //   - Popups / new windows  (no allow-popups)
 //   - Form submission       (no allow-forms)
-//   - Plugins               (no allow-plugins)
+//   - Plugins               (implicit)
 // Scripts and same-origin are permitted so modern news sites can render.
+//
+// Many sites set X-Frame-Options: DENY or CSP frame-ancestors, which prevents
+// iframe embedding regardless of sandbox. We detect this via a load timeout
+// and show a clear error state with the "Open in browser" CTA promoted.
 function SandboxedViewer({ url, onClose }: { url: string; onClose: () => void }) {
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'blocked'>('loading')
+  const timeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    setStatus('loading')
+    // If the iframe hasn't fired onLoad within 6s, assume the site blocked embedding.
+    timeoutRef.current = window.setTimeout(() => setStatus('blocked'), 6000)
+    return () => {
+      if (timeoutRef.current) window.clearTimeout(timeoutRef.current)
+    }
+  }, [url])
+
+  function handleLoad() {
+    if (timeoutRef.current) window.clearTimeout(timeoutRef.current)
+    setStatus('loaded')
+  }
+
+  function handleError() {
+    if (timeoutRef.current) window.clearTimeout(timeoutRef.current)
+    setStatus('blocked')
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-950">
       {/* Header */}
@@ -84,14 +110,55 @@ function SandboxedViewer({ url, onClose }: { url: string; onClose: () => void })
         </div>
       </div>
 
-      {/* Sandboxed iframe */}
-      <iframe
-        src={url}
-        title="Sandboxed external content"
-        sandbox="allow-scripts allow-same-origin"
-        referrerPolicy="no-referrer"
-        className="flex-1 w-full border-0 bg-white"
-      />
+      {/* Content area */}
+      <div className="relative flex-1 overflow-hidden">
+        {/* Loading state */}
+        {status === 'loading' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950">
+            <span className="h-6 w-6 animate-spin rounded-full border-2 border-slate-700 border-t-sky-400" />
+            <p className="text-sm text-slate-400">Loading sandboxed content…</p>
+          </div>
+        )}
+
+        {/* Blocked / error state */}
+        {status === 'blocked' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-slate-950 p-8 text-center">
+            <div className="rounded-full bg-amber-500/10 p-4">
+              <svg className="h-8 w-8 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                  d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-base font-semibold text-slate-200">Site cannot be embedded</p>
+              <p className="mt-1 max-w-sm text-sm text-slate-400">
+                This source has set <code className="rounded bg-slate-800 px-1 text-xs text-amber-300">X-Frame-Options</code> or
+                a Content Security Policy that blocks iframe embedding — a common security measure on news and regulatory sites.
+              </p>
+            </div>
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500"
+            >
+              Open in browser ↗
+            </a>
+            <p className="text-xs text-slate-600">Opens with noopener noreferrer in a new tab</p>
+          </div>
+        )}
+
+        {/* Sandboxed iframe — always mounted so onLoad/onError fire */}
+        <iframe
+          src={url}
+          title="Sandboxed external content"
+          sandbox="allow-scripts allow-same-origin"
+          referrerPolicy="no-referrer"
+          onLoad={handleLoad}
+          onError={handleError}
+          className={`h-full w-full border-0 bg-white ${status !== 'loaded' ? 'invisible' : ''}`}
+        />
+      </div>
     </div>
   )
 }
