@@ -42,6 +42,60 @@ function CategoryBadge({ category }: { category: MediaCategory }) {
   )
 }
 
+// ── Sandboxed URL viewer ──────────────────────────────────────────────────────
+// Opens external URLs inside a locked-down iframe to protect against malicious
+// redirects, popups, and top-level navigation. Sandbox attributes deny:
+//   - Top-level navigation  (no allow-top-navigation)
+//   - Popups / new windows  (no allow-popups)
+//   - Form submission       (no allow-forms)
+//   - Plugins               (no allow-plugins)
+// Scripts and same-origin are permitted so modern news sites can render.
+function SandboxedViewer({ url, onClose }: { url: string; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950">
+      {/* Header */}
+      <div className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-800 bg-slate-900 px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="shrink-0 rounded bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/20">
+              Sandboxed
+            </span>
+            <span className="truncate font-mono text-xs text-slate-400">{url}</span>
+          </div>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Protected sandbox — top-level navigation, popups, and form submission blocked
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-slate-500 hover:text-slate-100"
+          >
+            Open in browser ↗
+          </a>
+          <button
+            onClick={onClose}
+            className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
+      {/* Sandboxed iframe */}
+      <iframe
+        src={url}
+        title="Sandboxed external content"
+        sandbox="allow-scripts allow-same-origin"
+        referrerPolicy="no-referrer"
+        className="flex-1 w-full border-0 bg-white"
+      />
+    </div>
+  )
+}
+
 function ConfidenceMeter({ value }: { value: number }) {
   const color = value >= 80 ? 'bg-rose-500' : value >= 65 ? 'bg-amber-500' : 'bg-sky-500'
   return (
@@ -62,6 +116,7 @@ export default function AdverseMediaMonitor() {
 
   const [selected, setSelected] = useState<string | null>(null)
   const [filter, setFilter] = useState<MediaHitStatus | 'all'>('all')
+  const [sandboxUrl, setSandboxUrl] = useState<string | null>(null)
 
   const filtered =
     filter === 'all' ? mediaHits : mediaHits.filter((h) => h.status === filter)
@@ -76,6 +131,7 @@ export default function AdverseMediaMonitor() {
 
   return (
     <div>
+      {sandboxUrl && <SandboxedViewer url={sandboxUrl} onClose={() => setSandboxUrl(null)} />}
       <PageHeader title="Adverse Media Monitor" zone="AI Detection Zone">
         <span className="flex items-center gap-1.5 rounded-lg bg-emerald-600/10 px-3 py-1.5 text-xs font-medium text-emerald-300 ring-1 ring-emerald-500/20">
           <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
@@ -177,14 +233,12 @@ export default function AdverseMediaMonitor() {
                   <div className="text-xs uppercase text-slate-500">Source</div>
                   <div className="mt-1 text-sm font-semibold text-slate-200">{current.source}</div>
                   {current.url && (
-                    <a
-                      href={current.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-1 block truncate text-xs text-sky-400 hover:text-sky-300 hover:underline"
+                    <button
+                      onClick={() => setSandboxUrl(current.url)}
+                      className="mt-1 block truncate text-xs text-sky-400 hover:text-sky-300 hover:underline text-left"
                     >
                       {current.url}
-                    </a>
+                    </button>
                   )}
                 </div>
                 <div className="rounded-lg bg-slate-800/40 p-3">
