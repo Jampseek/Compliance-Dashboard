@@ -3,7 +3,7 @@
 // and court records for negative mentions of known customer entities.
 // Hits appear here in real-time for analyst review, replacing periodic manual
 // re-screening with continuous, event-driven monitoring.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../lib/store'
 import { Button, Card, Empty, PageHeader, Stat } from '../components/ui'
 import { clock, timeAgo } from '../lib/format'
@@ -42,6 +42,127 @@ function CategoryBadge({ category }: { category: MediaCategory }) {
   )
 }
 
+// ── Sandboxed URL viewer ──────────────────────────────────────────────────────
+// Opens external URLs inside a locked-down iframe to protect against malicious
+// redirects, popups, and top-level navigation. Sandbox attributes deny:
+//   - Top-level navigation  (no allow-top-navigation)
+//   - Popups / new windows  (no allow-popups)
+//   - Form submission       (no allow-forms)
+//   - Plugins               (implicit)
+// Scripts and same-origin are permitted so modern news sites can render.
+//
+// Many sites set X-Frame-Options: DENY or CSP frame-ancestors, which prevents
+// iframe embedding regardless of sandbox. We detect this via a load timeout
+// and show a clear error state with the "Open in browser" CTA promoted.
+function SandboxedViewer({ url, onClose }: { url: string; onClose: () => void }) {
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'blocked'>('loading')
+  const timeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    setStatus('loading')
+    // If the iframe hasn't fired onLoad within 6s, assume the site blocked embedding.
+    timeoutRef.current = window.setTimeout(() => setStatus('blocked'), 6000)
+    return () => {
+      if (timeoutRef.current) window.clearTimeout(timeoutRef.current)
+    }
+  }, [url])
+
+  function handleLoad() {
+    if (timeoutRef.current) window.clearTimeout(timeoutRef.current)
+    setStatus('loaded')
+  }
+
+  function handleError() {
+    if (timeoutRef.current) window.clearTimeout(timeoutRef.current)
+    setStatus('blocked')
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950">
+      {/* Header */}
+      <div className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-800 bg-slate-900 px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="shrink-0 rounded bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/20">
+              Sandboxed
+            </span>
+            <span className="truncate font-mono text-xs text-slate-400">{url}</span>
+          </div>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Protected sandbox — top-level navigation, popups, and form submission blocked
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-slate-500 hover:text-slate-100"
+          >
+            Open in browser ↗
+          </a>
+          <button
+            onClick={onClose}
+            className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
+      {/* Content area */}
+      <div className="relative flex-1 overflow-hidden">
+        {/* Loading state */}
+        {status === 'loading' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950">
+            <span className="h-6 w-6 animate-spin rounded-full border-2 border-slate-700 border-t-sky-400" />
+            <p className="text-sm text-slate-400">Loading sandboxed content…</p>
+          </div>
+        )}
+
+        {/* Blocked / error state */}
+        {status === 'blocked' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-slate-950 p-8 text-center">
+            <div className="rounded-full bg-amber-500/10 p-4">
+              <svg className="h-8 w-8 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                  d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-base font-semibold text-slate-200">Site cannot be embedded</p>
+              <p className="mt-1 max-w-sm text-sm text-slate-400">
+                This source has set <code className="rounded bg-slate-800 px-1 text-xs text-amber-300">X-Frame-Options</code> or
+                a Content Security Policy that blocks iframe embedding — a common security measure on news and regulatory sites.
+              </p>
+            </div>
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500"
+            >
+              Open in browser ↗
+            </a>
+            <p className="text-xs text-slate-600">Opens with noopener noreferrer in a new tab</p>
+          </div>
+        )}
+
+        {/* Sandboxed iframe — always mounted so onLoad/onError fire */}
+        <iframe
+          src={url}
+          title="Sandboxed external content"
+          sandbox="allow-scripts allow-same-origin"
+          referrerPolicy="no-referrer"
+          onLoad={handleLoad}
+          onError={handleError}
+          className={`h-full w-full border-0 bg-white ${status !== 'loaded' ? 'invisible' : ''}`}
+        />
+      </div>
+    </div>
+  )
+}
+
 function ConfidenceMeter({ value }: { value: number }) {
   const color = value >= 80 ? 'bg-rose-500' : value >= 65 ? 'bg-amber-500' : 'bg-sky-500'
   return (
@@ -62,6 +183,7 @@ export default function AdverseMediaMonitor() {
 
   const [selected, setSelected] = useState<string | null>(null)
   const [filter, setFilter] = useState<MediaHitStatus | 'all'>('all')
+  const [sandboxUrl, setSandboxUrl] = useState<string | null>(null)
 
   const filtered =
     filter === 'all' ? mediaHits : mediaHits.filter((h) => h.status === filter)
@@ -76,6 +198,7 @@ export default function AdverseMediaMonitor() {
 
   return (
     <div>
+      {sandboxUrl && <SandboxedViewer url={sandboxUrl} onClose={() => setSandboxUrl(null)} />}
       <PageHeader title="Adverse Media Monitor" zone="AI Detection Zone">
         <span className="flex items-center gap-1.5 rounded-lg bg-emerald-600/10 px-3 py-1.5 text-xs font-medium text-emerald-300 ring-1 ring-emerald-500/20">
           <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
@@ -177,14 +300,12 @@ export default function AdverseMediaMonitor() {
                   <div className="text-xs uppercase text-slate-500">Source</div>
                   <div className="mt-1 text-sm font-semibold text-slate-200">{current.source}</div>
                   {current.url && (
-                    <a
-                      href={current.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-1 block truncate text-xs text-sky-400 hover:text-sky-300 hover:underline"
+                    <button
+                      onClick={() => setSandboxUrl(current.url)}
+                      className="mt-1 block truncate text-xs text-sky-400 hover:text-sky-300 hover:underline text-left"
                     >
                       {current.url}
-                    </a>
+                    </button>
                   )}
                 </div>
                 <div className="rounded-lg bg-slate-800/40 p-3">
