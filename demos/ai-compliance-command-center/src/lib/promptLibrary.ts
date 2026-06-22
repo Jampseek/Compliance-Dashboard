@@ -28,8 +28,6 @@ Use ONLY the facts provided in the case file. Follow the structure: (1) who,
 (5) supporting indicators. Do not speculate beyond the evidence. Output a
 concise factual narrative suitable for {regulator} filing.`,
   },
-]
-
   {
     id: 'edd-narrative-v1',
     name: 'EDD Narrative Drafter',
