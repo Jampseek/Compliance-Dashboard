@@ -3,11 +3,12 @@
 // and court records for negative mentions of known customer entities.
 // Hits appear here in real-time for analyst review, replacing periodic manual
 // re-screening with continuous, event-driven monitoring.
+// EDD Integration: escalated hits can trigger OSINT collection + AI-drafted EDD reports.
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../lib/store'
 import { Button, Card, Empty, PageHeader, Stat } from '../components/ui'
 import { clock, timeAgo } from '../lib/format'
-import type { AdverseMediaHit, MediaCategory, MediaHitStatus } from '../lib/types'
+import type { AdverseMediaHit, EddReport, EddRiskRating, MediaCategory, MediaHitStatus, OsintSourceType } from '../lib/types'
 
 const CATEGORY_STYLE: Record<MediaCategory, string> = {
   fraud: 'bg-rose-500/10 text-rose-300 ring-rose-500/20',
@@ -175,11 +176,135 @@ function ConfidenceMeter({ value }: { value: number }) {
   )
 }
 
+// ── EDD components ────────────────────────────────────────────────────────────
+
+const OSINT_SOURCE_LABEL: Record<OsintSourceType, string> = {
+  corporate_registry:    'Corporate Registry',
+  beneficial_ownership:  'Beneficial Ownership',
+  court_records:         'Court Records',
+  social_media:          'Social Media',
+  regulatory_filings:    'Regulatory Filings',
+  pep_database:          'PEP Database',
+  sanctions_cross_check: 'Sanctions Cross-check',
+  news_aggregator:       'News Aggregator',
+}
+
+const EDD_RATING_STYLE: Record<EddRiskRating, string> = {
+  critical: 'bg-rose-500/15 text-rose-200 ring-rose-500/30',
+  high:     'bg-orange-500/10 text-orange-300 ring-orange-500/20',
+  medium:   'bg-amber-500/10 text-amber-300 ring-amber-500/20',
+  low:      'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20',
+}
+
+const RELEVANCE_DOT: Record<string, string> = {
+  high:   'bg-rose-400',
+  medium: 'bg-amber-400',
+  low:    'bg-slate-500',
+}
+
+function EddPanel({ report, onApprove }: { report: EddReport; onApprove: () => void }) {
+  const [tab, setTab] = useState<'narrative' | 'osint'>('narrative')
+
+  const highCount   = report.osintFindings.filter((f) => f.riskRelevance === 'high').length
+  const mediumCount = report.osintFindings.filter((f) => f.riskRelevance === 'medium').length
+
+  return (
+    <div className="mt-5 rounded-xl border border-sky-500/20 bg-sky-950/20">
+      {/* EDD header */}
+      <div className="flex items-center justify-between gap-3 border-b border-sky-500/20 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold uppercase tracking-wider text-sky-400">EDD Report</span>
+          <span className={`rounded px-2 py-0.5 text-xs font-semibold ring-1 ${EDD_RATING_STYLE[report.riskRating]}`}>
+            {report.riskRating.toUpperCase()}
+          </span>
+          {report.status === 'approved' && (
+            <span className="rounded bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-500/20">
+              ✓ Approved
+            </span>
+          )}
+          {report.status === 'draft' && (
+            <span className="rounded bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/20">
+              Draft — awaiting approval
+            </span>
+          )}
+        </div>
+        <span className="text-xs text-slate-500">
+          {report.osintFindings.length} sources · {highCount} high · {mediumCount} medium
+        </span>
+      </div>
+
+      {/* Tab switcher */}
+      <div className="flex gap-0 border-b border-sky-500/10 px-4 pt-2">
+        {(['narrative', 'osint'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`px-3 pb-2 text-xs font-medium transition border-b-2 ${
+              tab === t
+                ? 'border-sky-400 text-sky-300'
+                : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            {t === 'narrative' ? 'AI Narrative' : `OSINT Findings (${report.osintFindings.length})`}
+          </button>
+        ))}
+      </div>
+
+      <div className="p-4">
+        {tab === 'narrative' && (
+          <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap font-mono text-xs leading-relaxed text-slate-300">
+            {report.narrative}
+          </pre>
+        )}
+
+        {tab === 'osint' && (
+          <div className="max-h-72 space-y-2 overflow-y-auto">
+            {report.osintFindings.map((f, i) => (
+              <div key={i} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+                <div className="flex items-center gap-2">
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${RELEVANCE_DOT[f.riskRelevance]}`} />
+                  <span className="text-xs font-semibold text-slate-300">{f.source}</span>
+                  <span className="text-xs text-slate-600">·</span>
+                  <span className="text-xs text-slate-500">{OSINT_SOURCE_LABEL[f.sourceType]}</span>
+                  <span className="ml-auto text-xs text-slate-600">{f.confidence}% confidence</span>
+                </div>
+                <p className="mt-1.5 text-xs leading-relaxed text-slate-400">{f.finding}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {report.status === 'draft' && (
+          <div className="mt-4 flex items-center gap-3 border-t border-sky-500/10 pt-3">
+            <div className="flex-1 rounded-lg bg-amber-500/5 px-3 py-2 text-xs text-amber-200 ring-1 ring-amber-500/15">
+              AI-drafted EDD — review findings before approving. Approval confirms this report is accurate and authorises compliance action.
+            </div>
+            <Button variant="primary" onClick={onApprove}>
+              Approve EDD
+            </Button>
+          </div>
+        )}
+
+        {report.status === 'approved' && report.approvedBy && (
+          <p className="mt-3 text-xs text-slate-500 border-t border-sky-500/10 pt-3">
+            Approved by <span className="text-slate-300">{report.approvedBy}</span>
+            {report.approvedAt && ` · ${timeAgo(report.approvedAt)}`}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function AdverseMediaMonitor() {
   const mediaHits = useStore((s) => s.mediaHits)
   const reviewMediaHit = useStore((s) => s.reviewMediaHit)
   const dismissMediaHit = useStore((s) => s.dismissMediaHit)
   const escalateMediaHit = useStore((s) => s.escalateMediaHit)
+  const eddReports = useStore((s) => s.eddReports)
+  const generateEdd = useStore((s) => s.generateEdd)
+  const approveEdd = useStore((s) => s.approveEdd)
+  const eddDraftingHitId = useStore((s) => s.eddDraftingHitId)
 
   const [selected, setSelected] = useState<string | null>(null)
   const [filter, setFilter] = useState<MediaHitStatus | 'all'>('all')
@@ -273,97 +398,128 @@ export default function AdverseMediaMonitor() {
           </div>
 
           {/* Detail panel */}
-          {current && (
-            <Card className="p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="font-mono text-xs text-slate-500">{current.id}</div>
-                  <div className="mt-1 text-lg font-bold text-slate-100">{current.entityName}</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Detected {clock(current.detectedAt)} · {timeAgo(current.detectedAt)}
+          {current && (() => {
+            const edd = eddReports.find((r) => r.mediaHitId === current.id)
+            const isGenerating = eddDraftingHitId === current.id
+            return (
+              <Card className="p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="font-mono text-xs text-slate-500">{current.id}</div>
+                    <div className="mt-1 text-lg font-bold text-slate-100">{current.entityName}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      Detected {clock(current.detectedAt)} · {timeAgo(current.detectedAt)}
+                    </div>
+                  </div>
+                  <span className={`shrink-0 rounded px-2 py-1 text-xs ${STATUS_STYLE[current.status]}`}>
+                    {STATUS_LABEL[current.status]}
+                  </span>
+                </div>
+
+                {/* Headline */}
+                <div className="mt-5 rounded-lg border border-slate-700 bg-slate-950/60 p-4">
+                  <div className="text-xs font-semibold uppercase text-slate-500">Headline</div>
+                  <p className="mt-1 text-sm leading-relaxed text-slate-200">{current.headline}</p>
+                </div>
+
+                {/* Metadata grid */}
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <div className="rounded-lg bg-slate-800/40 p-3">
+                    <div className="text-xs uppercase text-slate-500">Source</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-200">{current.source}</div>
+                    {current.url && (
+                      <button
+                        onClick={() => setSandboxUrl(current.url)}
+                        className="mt-1 block truncate text-xs text-sky-400 hover:text-sky-300 hover:underline text-left"
+                      >
+                        {current.url}
+                      </button>
+                    )}
+                  </div>
+                  <div className="rounded-lg bg-slate-800/40 p-3">
+                    <div className="text-xs uppercase text-slate-500">Category</div>
+                    <div className="mt-1.5">
+                      <CategoryBadge category={current.category} />
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-slate-800/40 p-3">
+                    <div className="text-xs uppercase text-slate-500">Sentiment</div>
+                    <div
+                      className={`mt-1 text-sm font-semibold ${
+                        current.sentiment === 'highly_negative' ? 'text-rose-300' : 'text-amber-300'
+                      }`}
+                    >
+                      {current.sentiment === 'highly_negative' ? 'Highly negative' : 'Negative'}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-slate-800/40 p-3">
+                    <div className="mb-2 text-xs uppercase text-slate-500">NLP confidence</div>
+                    <ConfidenceMeter value={current.confidence} />
                   </div>
                 </div>
-                <span className={`shrink-0 rounded px-2 py-1 text-xs ${STATUS_STYLE[current.status]}`}>
-                  {STATUS_LABEL[current.status]}
-                </span>
-              </div>
 
-              {/* Headline */}
-              <div className="mt-5 rounded-lg border border-slate-700 bg-slate-950/60 p-4">
-                <div className="text-xs font-semibold uppercase text-slate-500">Headline</div>
-                <p className="mt-1 text-sm leading-relaxed text-slate-200">{current.headline}</p>
-              </div>
+                {current.reviewedBy && (
+                  <p className="mt-3 text-xs text-slate-500">
+                    Actioned by <span className="text-slate-300">{current.reviewedBy}</span>
+                  </p>
+                )}
 
-              {/* Metadata grid */}
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                <div className="rounded-lg bg-slate-800/40 p-3">
-                  <div className="text-xs uppercase text-slate-500">Source</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-200">{current.source}</div>
-                  {current.url && (
-                    <button
-                      onClick={() => setSandboxUrl(current.url)}
-                      className="mt-1 block truncate text-xs text-sky-400 hover:text-sky-300 hover:underline text-left"
-                    >
-                      {current.url}
-                    </button>
+                {/* Actions */}
+                <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-800 pt-4">
+                  {current.status === 'new' && (
+                    <Button variant="default" onClick={() => reviewMediaHit(current.id)}>
+                      Mark under review
+                    </Button>
+                  )}
+                  {(current.status === 'new' || current.status === 'under_review') && (
+                    <>
+                      <Button variant="primary" onClick={() => escalateMediaHit(current.id)}>
+                        Escalate — open CDD review
+                      </Button>
+                      <Button variant="ghost" onClick={() => dismissMediaHit(current.id)}>
+                        Dismiss — false positive
+                      </Button>
+                    </>
+                  )}
+                  {current.status === 'escalated' && !edd && !isGenerating && (
+                    <>
+                      <span className="flex items-center text-sm text-emerald-300">
+                        ✓ Escalated for Customer Due Diligence review
+                      </span>
+                      <Button
+                        variant="primary"
+                        onClick={() => generateEdd(current.id)}
+                      >
+                        Generate EDD — run OSINT
+                      </Button>
+                    </>
+                  )}
+                  {current.status === 'escalated' && isGenerating && (
+                    <div className="flex items-center gap-2 text-sm text-sky-300">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-700 border-t-sky-400" />
+                      Collecting OSINT &amp; drafting EDD…
+                    </div>
+                  )}
+                  {current.status === 'escalated' && edd && !isGenerating && (
+                    <span className="text-sm text-sky-300">
+                      ✓ EDD generated — review below
+                    </span>
+                  )}
+                  {current.status === 'dismissed' && (
+                    <span className="text-sm text-slate-500">Dismissed as false positive</span>
                   )}
                 </div>
-                <div className="rounded-lg bg-slate-800/40 p-3">
-                  <div className="text-xs uppercase text-slate-500">Category</div>
-                  <div className="mt-1.5">
-                    <CategoryBadge category={current.category} />
-                  </div>
-                </div>
-                <div className="rounded-lg bg-slate-800/40 p-3">
-                  <div className="text-xs uppercase text-slate-500">Sentiment</div>
-                  <div
-                    className={`mt-1 text-sm font-semibold ${
-                      current.sentiment === 'highly_negative' ? 'text-rose-300' : 'text-amber-300'
-                    }`}
-                  >
-                    {current.sentiment === 'highly_negative' ? 'Highly negative' : 'Negative'}
-                  </div>
-                </div>
-                <div className="rounded-lg bg-slate-800/40 p-3">
-                  <div className="mb-2 text-xs uppercase text-slate-500">NLP confidence</div>
-                  <ConfidenceMeter value={current.confidence} />
-                </div>
-              </div>
 
-              {current.reviewedBy && (
-                <p className="mt-3 text-xs text-slate-500">
-                  Actioned by <span className="text-slate-300">{current.reviewedBy}</span>
-                </p>
-              )}
-
-              {/* Actions */}
-              <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-800 pt-4">
-                {current.status === 'new' && (
-                  <Button variant="default" onClick={() => reviewMediaHit(current.id)}>
-                    Mark under review
-                  </Button>
+                {/* EDD panel — shown when an EDD report exists for this hit */}
+                {edd && (
+                  <EddPanel
+                    report={edd}
+                    onApprove={() => approveEdd(edd.id)}
+                  />
                 )}
-                {(current.status === 'new' || current.status === 'under_review') && (
-                  <>
-                    <Button variant="primary" onClick={() => escalateMediaHit(current.id)}>
-                      Escalate — open CDD review
-                    </Button>
-                    <Button variant="ghost" onClick={() => dismissMediaHit(current.id)}>
-                      Dismiss — false positive
-                    </Button>
-                  </>
-                )}
-                {current.status === 'escalated' && (
-                  <span className="text-sm text-emerald-300">
-                    ✓ Escalated for Customer Due Diligence review
-                  </span>
-                )}
-                {current.status === 'dismissed' && (
-                  <span className="text-sm text-slate-500">Dismissed as false positive</span>
-                )}
-              </div>
-            </Card>
-          )}
+              </Card>
+            )
+          })()}
         </div>
       )}
     </div>

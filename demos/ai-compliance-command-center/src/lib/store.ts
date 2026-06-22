@@ -14,11 +14,13 @@
 // so the demo runs with zero backend setup.
 
 import { create } from 'zustand'
-import type { AdverseMediaHit, Alert, AuditEntry, Case, KycRegulator, KycReport, Transaction } from './types'
+import type { AdverseMediaHit, Alert, AuditEntry, Case, EddReport, KycRegulator, KycReport, Transaction } from './types'
 import { makeMediaHit, makeTransaction } from './mockData'
 import { screen } from './screening'
 import { assess } from './riskEngine'
 import { draftSarAI } from './aiSarDrafter'
+import { draftEdd } from './aiEddDrafter'
+import { generateOsintFindings } from './osintData'
 import { appendAudit } from './audit'
 import { id } from './random'
 import { PRINCIPALS, type Role } from './rbac'
@@ -141,6 +143,7 @@ interface State {
   cases: Case[]
   mediaHits: AdverseMediaHit[]
   kycReports: KycReport[]
+  eddReports: EddReport[]
   audit: AuditEntry[]
   stats: PipelineStats
 
@@ -157,6 +160,9 @@ interface State {
   reviewMediaHit: (hitId: string) => void
   dismissMediaHit: (hitId: string) => void
   escalateMediaHit: (hitId: string) => void
+  eddDraftingHitId: string | null
+  generateEdd: (hitId: string) => Promise<void>
+  approveEdd: (eddId: string) => void
   submitKycReport: (reportId: string) => void
   reset: () => void
 }
@@ -170,9 +176,11 @@ export const useStore = create<State>((set, get) => ({
   cases: [],
   mediaHits: [],
   kycReports: [],
+  eddReports: [],
   audit: [],
   stats: { ingested: 0, autoCleared: 0 },
   sarDraftingCaseId: null,
+  eddDraftingHitId: null,
 
   setRole: (r) => set({ role: r }),
 
@@ -432,6 +440,51 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
+  generateEdd: async (hitId) => {
+    const state = get()
+    const hit = state.mediaHits.find((h) => h.id === hitId)
+    if (!hit) return
+    const actor = PRINCIPALS[state.role].name
+    set({ eddDraftingHitId: hitId })
+    try {
+      const now = Date.now()
+      const ts  = new Date(now).toISOString()
+      const findings = generateOsintFindings(hit.entityName, hit.category, now)
+      set((s) => {
+        const audit = [...s.audit]
+        audit.push(appendAudit(audit, 'edd_initiated', actor, hitId, `OSINT scan — ${hit.entityName}`, ts))
+        return { audit }
+      })
+      const report = await draftEdd(hit, findings, actor, now)
+      set((s) => {
+        const audit = [...s.audit]
+        audit.push(appendAudit(audit, 'edd_drafted', 'system:edd-ai', report.id, `${hit.entityName} — ${report.riskRating}`, ts))
+        return {
+          eddReports: [report, ...s.eddReports],
+          audit,
+          eddDraftingHitId: null,
+        }
+      })
+    } catch {
+      set({ eddDraftingHitId: null })
+    }
+  },
+
+  approveEdd: (eddId) => {
+    const actor = PRINCIPALS[get().role].name
+    set((s) => {
+      const ts = new Date().toISOString()
+      const audit = [...s.audit]
+      audit.push(appendAudit(audit, 'edd_approved', actor, eddId, 'human approval gate', ts))
+      return {
+        eddReports: s.eddReports.map((r) =>
+          r.id === eddId ? { ...r, status: 'approved', approvedBy: actor, approvedAt: ts } : r,
+        ),
+        audit,
+      }
+    })
+  },
+
   submitKycReport: (reportId) => {
     const actor = PRINCIPALS[get().role].name
     set((s) => {
@@ -457,6 +510,7 @@ export const useStore = create<State>((set, get) => ({
       cases: [],
       mediaHits: [],
       kycReports: [],
+      eddReports: [],
       audit: [],
       stats: { ingested: 0, autoCleared: 0 },
     }),
