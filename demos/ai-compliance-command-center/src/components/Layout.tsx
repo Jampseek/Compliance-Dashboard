@@ -48,6 +48,8 @@ export default function Layout() {
   const navigate = useNavigate()
 
   const [running, setRunning] = useState(true)
+  const [apiReachable, setApiReachable] = useState(false)
+  const [apiTransactionCount, setApiTransactionCount] = useState(0)
   const timer = useRef<number | null>(null)
 
   // The simulated Kafka / Azure Event Hubs feed: emit a transaction every ~1.5s.
@@ -142,6 +144,11 @@ export default function Layout() {
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-slate-800 bg-slate-950/60 px-6 py-3">
+                {/* .NET API connection status */}
+                <div className="flex items-center gap-2 text-sm text-slate-300">
+                  <span className={`inline-block h-2 w-2 rounded-full ${apiReachable ? 'bg-emerald-400' : 'bg-gray-500'}`} title={apiReachable ? 'API reachable' : 'API unreachable'}></span>
+                  <span>{apiReachable ? `API OK – ${apiTransactionCount} txn${apiTransactionCount !== 1 ? 's' : ''}` : 'API not reachable'}</span>
+                </div>
           <div className="flex items-center gap-3">
             <button
               onClick={() => setRunning((r) => !r)}

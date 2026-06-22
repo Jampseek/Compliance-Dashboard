@@ -265,7 +265,18 @@ export const useStore = create<State>((set, get) => ({
     })
   },
 
-  clearAlert: (alertId) => {
+  fetchTransactionsFromApi: async () => {
+    try {
+      const response = await fetch('http://localhost:5082/api/transactions');
+      if (!response.ok) throw new Error('Network error');
+      const data = await response.json();
+      set((s) => ({ ...s, transactions: data }));
+    } catch (error) {
+      console.error('Failed to fetch transactions from API:', error);
+      // keep existing mock data (no state change)
+    }
+  },
+clearAlert: (alertId) => {
     const actor = PRINCIPALS[get().role].name
     set((s) => {
       const ts = new Date().toISOString()
