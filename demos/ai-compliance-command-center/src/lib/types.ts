@@ -137,6 +137,47 @@ export interface KycReport {
   }
 }
 
+// ── Enhanced Due Diligence (EDD) ─────────────────────────────────────────────
+
+export type OsintSourceType =
+  | 'corporate_registry'
+  | 'beneficial_ownership'
+  | 'court_records'
+  | 'social_media'
+  | 'regulatory_filings'
+  | 'pep_database'
+  | 'sanctions_cross_check'
+  | 'news_aggregator'
+
+export interface OsintFinding {
+  sourceType: OsintSourceType
+  source: string
+  finding: string
+  confidence: number // 0-100
+  riskRelevance: 'high' | 'medium' | 'low'
+  url?: string
+  retrievedAt: string
+}
+
+export type EddStatus = 'drafting' | 'draft' | 'approved'
+export type EddRiskRating = 'critical' | 'high' | 'medium' | 'low'
+
+/** An AI-drafted Enhanced Due Diligence report, synthesised from OSINT findings
+ *  triggered by an adverse media hit. The AI produces the draft; a human approves it. */
+export interface EddReport {
+  id: string
+  mediaHitId: string
+  entityName: string
+  initiatedAt: string
+  initiatedBy: string
+  status: EddStatus
+  osintFindings: OsintFinding[]
+  narrative: string       // AI-generated EDD narrative
+  riskRating: EddRiskRating
+  approvedBy?: string
+  approvedAt?: string
+}
+
 export type AuditAction =
   | 'transaction_ingested'
   | 'auto_cleared'
@@ -156,6 +197,9 @@ export type AuditAction =
   | 'ctr_generated'
   | 'str_generated'
   | 'kyc_report_submitted'
+  | 'edd_initiated'
+  | 'edd_drafted'
+  | 'edd_approved'
 
 /** An append-only record destined for the Azure Blob Immutable Audit Store. */
 export interface AuditEntry {

@@ -14,6 +14,7 @@ import {
   Play,
   Radio,
   ShieldCheck,
+  ScanSearch,
 } from 'lucide-react'
 import { useStore } from '../lib/store'
 import { PRINCIPALS, ROLES, can, type Role } from '../lib/rbac'
@@ -31,6 +32,7 @@ const NAV: NavItem[] = [
   { to: '/alerts', label: 'Alert Queue', icon: Bell, zone: 'Orchestration' },
   { to: '/analyst', label: 'Analyst Dashboard', icon: Activity, zone: 'Human Oversight' },
   { to: '/cases', label: 'Case Investigation', icon: FileSearch, zone: 'Human Oversight' },
+  { to: '/edd', label: 'EDD Reports', icon: ScanSearch, zone: 'Human Oversight' },
   { to: '/kyc', label: 'KYC Reporting', icon: ClipboardList, zone: 'Governance' },
   { to: '/executive', label: 'Executive Dashboard', icon: BarChart3, zone: 'Governance' },
   { to: '/audit', label: 'Immutable Audit', icon: BadgeCheck, zone: 'Governance' },
@@ -68,9 +70,11 @@ export default function Layout() {
 
   const mediaHits = useStore((s) => s.mediaHits)
   const kycReports = useStore((s) => s.kycReports)
+  const eddReports = useStore((s) => s.eddReports)
   const openAlerts = alerts.filter((a) => a.status === 'triaged' || a.status === 'in_review').length
   const newMediaHits = mediaHits.filter((h) => h.status === 'new').length
   const pendingKyc = kycReports.filter((r) => r.status !== 'submitted').length
+  const pendingEdd = eddReports.filter((r) => r.status === 'draft').length
 
   return (
     <div className="flex h-full">
@@ -111,6 +115,11 @@ export default function Layout() {
                 {item.to === '/media' && newMediaHits > 0 && (
                   <span className="rounded-full bg-rose-500/20 px-1.5 text-xs text-rose-300">
                     {newMediaHits}
+                  </span>
+                )}
+                {item.to === '/edd' && pendingEdd > 0 && (
+                  <span className="rounded-full bg-sky-500/20 px-1.5 text-xs text-sky-300">
+                    {pendingEdd}
                   </span>
                 )}
                 {item.to === '/kyc' && pendingKyc > 0 && (
