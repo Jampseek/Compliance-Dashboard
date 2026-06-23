@@ -50,7 +50,25 @@ export default function Layout() {
   const [running, setRunning] = useState(true)
   const [apiReachable, setApiReachable] = useState(false)
   const [apiTransactionCount, setApiTransactionCount] = useState(0)
-  const timer = useRef<number | null>(null)
+    const timer = useRef<number | null>(null)
+
+    useEffect(() => {
+        const check = async () => {
+            try {
+                const resp = await fetch('/api/transactions')
+                if (!resp.ok) throw new Error('bad status')
+                const data = await resp.json()
+                setApiReachable(true)
+                setApiTransactionCount(Array.isArray(data) ? data.length : 0)
+            } catch {
+                setApiReachable(false)
+                setApiTransactionCount(0)
+            }
+        }
+        check()
+        const id = setInterval(check, 5000)
+        return () => clearInterval(id)
+    }, [])
 
   // The simulated Kafka / Azure Event Hubs feed: emit a transaction every ~1.5s.
   useEffect(() => {
