@@ -15,6 +15,7 @@ import {
   Radio,
   ShieldCheck,
   ScanSearch,
+  Shield,
 } from 'lucide-react'
 import { useStore } from '../lib/store'
 import { PRINCIPALS, ROLES, can, type Role } from '../lib/rbac'
@@ -34,6 +35,7 @@ const NAV: NavItem[] = [
   { to: '/cases', label: 'Case Investigation', icon: FileSearch, zone: 'Human Oversight' },
   { to: '/edd', label: 'EDD Reports', icon: ScanSearch, zone: 'Human Oversight' },
   { to: '/kyc', label: 'KYC Reporting', icon: ClipboardList, zone: 'Governance' },
+  { to: '/customer-risk-profiles', label: 'Customer Risk Profiles', icon: Shield, zone: 'Governance' },
   { to: '/executive', label: 'Executive Dashboard', icon: BarChart3, zone: 'Governance' },
   { to: '/audit', label: 'Immutable Audit', icon: BadgeCheck, zone: 'Governance' },
 ]

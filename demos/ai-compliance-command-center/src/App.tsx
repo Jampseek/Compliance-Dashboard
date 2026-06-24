@@ -9,6 +9,7 @@ import AuditStore from './pages/AuditStore'
 import AdverseMediaMonitor from './pages/AdverseMediaMonitor'
 import KYCReporting from './pages/KYCReporting'
 import EddReports from './pages/EddReports'
+import CustomerRiskProfiles from './pages/CustomerRiskProfiles'
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="/edd" element={<EddReports />} />
           <Route path="/kyc" element={<KYCReporting />} />
           <Route path="/audit" element={<AuditStore />} />
+        <Route path="/customer-risk-profiles" element={<CustomerRiskProfiles />} />
           <Route path="*" element={<Navigate to="/screening" replace />} />
         </Route>
       </Routes>
