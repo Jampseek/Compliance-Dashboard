@@ -14,7 +14,7 @@
 // so the demo runs with zero backend setup.
 
 import { create } from 'zustand'
-import type { AdverseMediaHit, Alert, AuditEntry, Case, EddReport, KycRegulator, KycReport, Transaction } from './types'
+import type { AdverseMediaHit, Alert, AuditEntry, Case, CustomerProfile, CustomerRiskTier, CustomerTierEvent, EddReport, KycRegulator, KycReport, Transaction } from './types'
 import { makeMediaHit, makeTransaction } from './mockData'
 import { screen } from './screening'
 import { assess } from './riskEngine'
@@ -109,6 +109,76 @@ function makeStr(c: Case, now: number): KycReport {
   }
 }
 
+// ── Perpetual KYC helpers ─────────────────────────────────────────────────────
+
+const TIER_ORDER: CustomerRiskTier[] = ['low', 'medium', 'high', 'critical']
+
+const REVIEW_DAYS: Record<CustomerRiskTier, number> = {
+  low: 365, medium: 180, high: 90, critical: 30,
+}
+
+function higherTier(a: CustomerRiskTier, b: CustomerRiskTier): CustomerRiskTier {
+  return TIER_ORDER.indexOf(a) >= TIER_ORDER.indexOf(b) ? a : b
+}
+
+function nextReviewDate(tier: CustomerRiskTier, now: number): string {
+  return new Date(now + REVIEW_DAYS[tier] * 24 * 60 * 60 * 1000).toISOString()
+}
+
+function upsertCustomer(
+  list: CustomerProfile[],
+  name: string,
+  proposedTier: CustomerRiskTier,
+  triggerLabel: string,
+  now: number,
+  counters: { transactions?: number; alerts?: number; media?: number; sanctions?: number },
+): CustomerProfile[] {
+  const ts  = new Date(now).toISOString()
+  const existing = list.find((c) => c.name === name)
+
+  if (!existing) {
+    const profile: CustomerProfile = {
+      id: id('cust'),
+      name,
+      riskTier: proposedTier,
+      nextReviewDue: nextReviewDate(proposedTier, now),
+      firstSeenAt: ts,
+      lastEventAt: ts,
+      totalTransactions: counters.transactions ?? 0,
+      totalAlerts:       counters.alerts       ?? 0,
+      totalMediaHits:    counters.media        ?? 0,
+      sanctionsHits:     counters.sanctions    ?? 0,
+      tierHistory: proposedTier !== 'low' ? [{
+        timestamp: ts,
+        fromTier: 'low',
+        toTier: proposedTier,
+        trigger: triggerLabel,
+      }] : [],
+    }
+    return [profile, ...list]
+  }
+
+  const newTier    = higherTier(existing.riskTier, proposedTier)
+  const tierChanged = newTier !== existing.riskTier
+  const newEvent: CustomerTierEvent | null = tierChanged
+    ? { timestamp: ts, fromTier: existing.riskTier, toTier: newTier, trigger: triggerLabel }
+    : null
+
+  const updated: CustomerProfile = {
+    ...existing,
+    riskTier:          newTier,
+    lastEventAt:       ts,
+    nextReviewDue:     tierChanged ? nextReviewDate(newTier, now) : existing.nextReviewDue,
+    totalTransactions: existing.totalTransactions + (counters.transactions ?? 0),
+    totalAlerts:       existing.totalAlerts       + (counters.alerts       ?? 0),
+    totalMediaHits:    existing.totalMediaHits    + (counters.media        ?? 0),
+    sanctionsHits:     existing.sanctionsHits     + (counters.sanctions    ?? 0),
+    tierHistory:       newEvent ? [newEvent, ...existing.tierHistory] : existing.tierHistory,
+  }
+
+  return list.map((c) => (c.name === name ? updated : c))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 function triage(alert: Alert): { priority: number; summary: string } {
@@ -144,6 +214,7 @@ interface State {
   mediaHits: AdverseMediaHit[]
   kycReports: KycReport[]
   eddReports: EddReport[]
+  customers: CustomerProfile[]
   audit: AuditEntry[]
   stats: PipelineStats
 
@@ -163,6 +234,7 @@ interface State {
   eddDraftingHitId: string | null
   generateEdd: (hitId: string) => Promise<void>
   approveEdd: (eddId: string) => void
+  reviewCustomer: (customerId: string, newTier: CustomerRiskTier) => void
   submitKycReport: (reportId: string) => void
   reset: () => void
 }
@@ -177,6 +249,7 @@ export const useStore = create<State>((set, get) => ({
   mediaHits: [],
   kycReports: [],
   eddReports: [],
+  customers: [],
   audit: [],
   stats: { ingested: 0, autoCleared: 0 },
   sarDraftingCaseId: null,
@@ -223,6 +296,51 @@ export const useStore = create<State>((set, get) => ({
         kycReports.unshift(autoStr)
       }
 
+      // ── pKYC: upsert originator profile ─────────────────────────────────────
+      const hasSanctions = assessment.screeningHits.some((h) =>
+        ['OFAC', 'EU', 'UN'].includes(h.list),
+      )
+      const originatorTier: CustomerRiskTier = hasSanctions
+        ? 'critical'
+        : assessment.band === 'high' ? 'high'
+        : assessment.band === 'medium' ? 'medium'
+        : 'low'
+
+      const triggerDesc = hasSanctions
+        ? `${txn.type.toUpperCase()} ${txn.currency} ${txn.amount.toLocaleString()} — sanctions hit`
+        : `${txn.type.toUpperCase()} ${txn.currency} ${txn.amount.toLocaleString()} — ${assessment.band} risk (score ${assessment.score})`
+
+      let customers = upsertCustomer(
+        s.customers,
+        txn.originator,
+        originatorTier,
+        triggerDesc,
+        now,
+        {
+          transactions: 1,
+          alerts: assessment.band !== 'low' ? 1 : 0,
+          sanctions: hasSanctions ? 1 : 0,
+        },
+      )
+
+      // If a customer_risk_changed audit event is warranted, log it
+      const origProfile = s.customers.find((c) => c.name === txn.originator)
+      if (originatorTier !== 'low' && (!origProfile || higherTier(origProfile.riskTier, originatorTier) !== origProfile?.riskTier)) {
+        audit.push(appendAudit(audit, 'customer_risk_changed', SYSTEM_ACTOR, txn.originator, `→ ${originatorTier}`, ts))
+      }
+
+      // pKYC: upsert media hit entity if name matches a known customer
+      if (mediaHit) {
+        const mediaProfile = customers.find((c) => c.name === mediaHit.entityName)
+        if (mediaProfile) {
+          customers = upsertCustomer(customers, mediaHit.entityName, 'medium', `Adverse media: ${mediaHit.category}`, now, { media: 1 })
+          const after = customers.find((c) => c.name === mediaHit.entityName)
+          if (after && after.riskTier !== mediaProfile.riskTier) {
+            audit.push(appendAudit(audit, 'customer_risk_changed', 'system:nlp-media-scanner', mediaHit.entityName, `→ ${after.riskTier}`, ts))
+          }
+        }
+      }
+
       // Low risk -> auto-cleared with an audit record (diagram: D ->|Low Risk| G).
       if (assessment.band === 'low') {
         audit.push(
@@ -233,6 +351,7 @@ export const useStore = create<State>((set, get) => ({
           stats: { ...stats, autoCleared: stats.autoCleared + 1 },
           mediaHits,
           kycReports,
+          customers,
           audit,
         }
       }
@@ -259,6 +378,7 @@ export const useStore = create<State>((set, get) => ({
         alerts: [alert, ...s.alerts],
         mediaHits,
         kycReports,
+        customers,
         stats,
         audit,
       }
@@ -426,15 +546,31 @@ export const useStore = create<State>((set, get) => ({
     set((s) => {
       const hit = s.mediaHits.find((h) => h.id === hitId)
       if (!hit) return s
-      const ts = new Date().toISOString()
+      const now = Date.now()
+      const ts = new Date(now).toISOString()
       const audit = [...s.audit]
       audit.push(
         appendAudit(audit, 'media_hit_escalated', actor, hitId, `CDD review — ${hit.entityName}`, ts),
       )
+      // pKYC: escalated adverse media promotes the entity to at least High
+      const prior = s.customers.find((c) => c.name === hit.entityName)
+      const customers = upsertCustomer(
+        s.customers,
+        hit.entityName,
+        hit.category === 'sanctions' || hit.sentiment === 'highly_negative' ? 'critical' : 'high',
+        `Adverse media escalated: ${hit.category} — "${hit.headline.slice(0, 60)}"`,
+        now,
+        { media: prior ? 0 : 1 },
+      )
+      const after = customers.find((c) => c.name === hit.entityName)
+      if (after && after.riskTier !== prior?.riskTier) {
+        audit.push(appendAudit(audit, 'customer_risk_changed', actor, hit.entityName, `→ ${after.riskTier}`, ts))
+      }
       return {
         mediaHits: s.mediaHits.map((h) =>
           h.id === hitId ? { ...h, status: 'escalated', reviewedBy: actor } : h,
         ),
+        customers,
         audit,
       }
     })
@@ -473,12 +609,69 @@ export const useStore = create<State>((set, get) => ({
   approveEdd: (eddId) => {
     const actor = PRINCIPALS[get().role].name
     set((s) => {
-      const ts = new Date().toISOString()
+      const report = s.eddReports.find((r) => r.id === eddId)
+      if (!report) return s
+      const now = Date.now()
+      const ts  = new Date(now).toISOString()
       const audit = [...s.audit]
       audit.push(appendAudit(audit, 'edd_approved', actor, eddId, 'human approval gate', ts))
+      // pKYC: approved EDD risk rating feeds into the customer tier
+      const eddTier: CustomerRiskTier =
+        report.riskRating === 'critical' ? 'critical'
+        : report.riskRating === 'high'   ? 'high'
+        : report.riskRating === 'medium' ? 'medium'
+        : 'low'
+      const prior = s.customers.find((c) => c.name === report.entityName)
+      const customers = upsertCustomer(
+        s.customers,
+        report.entityName,
+        eddTier,
+        `EDD approved: ${report.riskRating.toUpperCase()} rating`,
+        now,
+        {},
+      )
+      const after = customers.find((c) => c.name === report.entityName)
+      if (after && after.riskTier !== prior?.riskTier) {
+        audit.push(appendAudit(audit, 'customer_risk_changed', actor, report.entityName, `→ ${after.riskTier} (EDD)`, ts))
+      }
       return {
         eddReports: s.eddReports.map((r) =>
           r.id === eddId ? { ...r, status: 'approved', approvedBy: actor, approvedAt: ts } : r,
+        ),
+        customers,
+        audit,
+      }
+    })
+  },
+
+  reviewCustomer: (customerId, newTier) => {
+    const actor = PRINCIPALS[get().role].name
+    set((s) => {
+      const profile = s.customers.find((c) => c.id === customerId)
+      if (!profile) return s
+      const now = Date.now()
+      const ts  = new Date(now).toISOString()
+      const audit = [...s.audit]
+      const tierChanged = newTier !== profile.riskTier
+      const event = tierChanged
+        ? [{ timestamp: ts, fromTier: profile.riskTier, toTier: newTier, trigger: `Manual review by ${actor}` }, ...profile.tierHistory]
+        : profile.tierHistory
+      if (tierChanged) {
+        audit.push(appendAudit(audit, 'customer_risk_changed', actor, profile.name, `→ ${newTier} (review)`, ts))
+      }
+      audit.push(appendAudit(audit, 'customer_reviewed', actor, profile.name, `tier confirmed: ${newTier}`, ts))
+      return {
+        customers: s.customers.map((c) =>
+          c.id === customerId
+            ? {
+                ...c,
+                riskTier: newTier,
+                nextReviewDue: nextReviewDate(newTier, now),
+                lastReviewedAt: ts,
+                lastReviewedBy: actor,
+                tierHistory: event,
+              }
+            : c,
         ),
         audit,
       }
@@ -511,6 +704,7 @@ export const useStore = create<State>((set, get) => ({
       mediaHits: [],
       kycReports: [],
       eddReports: [],
+      customers: [],
       audit: [],
       stats: { ingested: 0, autoCleared: 0 },
     }),

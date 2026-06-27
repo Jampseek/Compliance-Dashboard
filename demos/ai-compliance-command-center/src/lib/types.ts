@@ -137,6 +137,40 @@ export interface KycReport {
   }
 }
 
+// ── Perpetual KYC — Customer Risk Profiles ───────────────────────────────────
+
+export type CustomerRiskTier = 'low' | 'medium' | 'high' | 'critical'
+
+/** A risk tier transition logged when a compliance event elevates a customer's tier. */
+export interface CustomerTierEvent {
+  timestamp: string
+  fromTier: CustomerRiskTier
+  toTier: CustomerRiskTier
+  trigger: string  // e.g. "High-risk WIRE USD 45,000 — sanctions hit (OFAC)"
+}
+
+/**
+ * Perpetual KYC profile for a known customer entity.
+ * Updated reactively by every compliance event (transaction ingestion, alert,
+ * adverse media, EDD approval). Never computed at render time.
+ * Tiers can only rise from automated events; downgrade requires human review.
+ */
+export interface CustomerProfile {
+  id: string
+  name: string
+  riskTier: CustomerRiskTier
+  nextReviewDue: string    // ISO — recalculated on every tier promotion
+  firstSeenAt: string      // ISO
+  lastEventAt: string      // ISO
+  lastReviewedAt?: string  // ISO — set by human review action
+  lastReviewedBy?: string
+  totalTransactions: number
+  totalAlerts: number
+  totalMediaHits: number   // new + escalated; dismissed excluded
+  sanctionsHits: number
+  tierHistory: CustomerTierEvent[]  // most-recent-first; only tier-change events logged
+}
+
 // ── Enhanced Due Diligence (EDD) ─────────────────────────────────────────────
 
 export type OsintSourceType =
@@ -200,6 +234,8 @@ export type AuditAction =
   | 'edd_initiated'
   | 'edd_drafted'
   | 'edd_approved'
+  | 'customer_risk_changed'
+  | 'customer_reviewed'
 
 /** An append-only record destined for the Azure Blob Immutable Audit Store. */
 export interface AuditEntry {
