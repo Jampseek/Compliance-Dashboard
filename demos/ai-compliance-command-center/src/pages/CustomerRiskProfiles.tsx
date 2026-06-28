@@ -1,319 +1,183 @@
-// Human Oversight / Governance — Perpetual KYC Customer Risk Profiles.
-//
-// Profiles are NOT computed at render time. They are maintained in the store
-// and updated reactively by every compliance event:
-//   transaction ingestion  → sets/raises risk tier from transaction risk band
-//   adverse media hit      → raises tier to ≥ Medium on detection, ≥ High on escalation
-//   EDD approval           → raises tier based on EDD risk rating
-//   human review           → the only mechanism that can LOWER a tier
-//
-// Review cadence enforced by tier:
-//   Critical → 30 days   High → 90 days   Medium → 180 days   Low → 365 days
 import { useState } from 'react'
 import { useStore } from '../lib/store'
-import { Button, Card, Empty, PageHeader, Stat } from '../components/ui'
-import { clock, timeAgo } from '../lib/format'
-import type { CustomerProfile, CustomerRiskTier } from '../lib/types'
+import { PageHeader } from '../components/ui'
+import type { Transaction, Alert, AdverseMediaHit } from '../lib/types'
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+/** Computes risk profile statistics for a customer */
+function computeCustomerRiskProfile(
+  customerName: string,
+  transactions: Transaction[],
+  alerts: Alert[],
+  mediaHits: AdverseMediaHit[]
+): CustomerRiskProfile {
+  // Count total transactions involving the customer (as originator)
+  const totalTransactions = transactions.filter(t => t.originator === customerName).length
 
-const TIER_STYLE: Record<CustomerRiskTier, string> = {
-  critical: 'bg-rose-500/15 text-rose-200 ring-rose-500/30',
-  high:     'bg-orange-500/10 text-orange-300 ring-orange-500/20',
-  medium:   'bg-amber-500/10 text-amber-300 ring-amber-500/20',
-  low:      'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20',
+  // Count flagged transactions (alerts associated with this customer)
+  const flaggedTransactions = alerts.filter(a => a.transaction.originator === customerName).length
+
+  // Count adverse media hits (only new/unresolved hits count toward risk)
+  const adverseMediaHits = mediaHits.filter(h => h.entityName === customerName && h.status === 'new').length
+
+  // Count sanctions matches for this customer (screening hits with OFAC/EU/UN)
+  const sanctionsHits = alerts
+    .filter(a => a.transaction.originator === customerName)
+    .flatMap(a => a.assessment.screeningHits || [])
+    .filter(s => ['OFAC', 'EU', 'UN'].includes(s.list || ''))
+    .length
+
+  // Determine current risk level from highest assessment band
+  const riskBands = alerts
+    .filter(a => a.transaction.originator === customerName && a.assessment.band)
+    .map(a => a.assessment.band)
+
+  let riskLevel: 'Low' | 'Medium' | 'High' | 'Critical' = 'Low'
+  if (riskBands.includes('high')) {
+    riskLevel = 'High'
+  }
+  // Critical when sanctions or high risk + media hits
+  if (riskBands.includes('high') && mediaHits.length > 0) {
+    riskLevel = 'Critical'
+  }
+  if (sanctionsHits > 0) {
+    riskLevel = 'Critical'
+  }
+
+  // Find latest timestamp for last activity
+  const allTimestamps = [
+    ...transactions.filter(t => t.originator === customerName).map(t => new Date(t.timestamp).getTime()),
+    ...alerts.filter(a => a.transaction.originator === customerName).map(a => new Date(a.createdAt).getTime()),
+    ...mediaHits.filter(h => h.entityName === customerName).map(h => new Date(h.detectedAt).getTime())
+  ]
+  const latestMs = allTimestamps.length > 0 ? Math.max(...allTimestamps) : 0
+  const lastActivityTimestamp = latestMs
+    ? new Date(latestMs).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : 'N/A'
+
+  return {
+    name: customerName,
+    riskLevel,
+    totalTransactions,
+    flaggedTransactions,
+    adverseMediaHits,
+    sanctionsMatches: sanctionsHits,
+    lastActivityTimestamp,
+  }
 }
 
-const TIER_BAR: Record<CustomerRiskTier, string> = {
-  critical: 'bg-rose-500',
-  high:     'bg-orange-500',
-  medium:   'bg-amber-500',
-  low:      'bg-emerald-500',
+/** Type representing the stored transaction data format */
+interface Transaction {
+  id: string
+  timestamp: string
+  originator: string
 }
 
-const TIER_ORDER: CustomerRiskTier[] = ['critical', 'high', 'medium', 'low']
-
-function TierBadge({ tier }: { tier: CustomerRiskTier }) {
-  return (
-    <span className={`rounded px-2 py-0.5 text-xs font-semibold ring-1 ${TIER_STYLE[tier]}`}>
-      {tier.toUpperCase()}
-    </span>
-  )
-}
-
-function ReviewDueLabel({ isoDate }: { isoDate: string }) {
-  const due  = new Date(isoDate).getTime()
-  const now  = Date.now()
-  const overdue = due < now
-  const days = Math.abs(Math.round((due - now) / 86_400_000))
-  return overdue ? (
-    <span className="text-xs font-semibold text-rose-400">
-      Overdue by {days}d
-    </span>
-  ) : (
-    <span className="text-xs text-slate-400">
-      Due in {days}d ({clock(isoDate)})
-    </span>
-  )
-}
-
-// ── Detail panel ─────────────────────────────────────────────────────────────
-
-function CustomerDetail({
-  profile,
-  onReview,
-}: {
-  profile: CustomerProfile
-  onReview: (newTier: CustomerRiskTier) => void
-}) {
-  const [selectedTier, setSelectedTier] = useState<CustomerRiskTier>(profile.riskTier)
-  const isOverdue = new Date(profile.nextReviewDue).getTime() < Date.now()
-
-  return (
-    <Card className="p-5">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="font-mono text-xs text-slate-500">{profile.id}</div>
-          <div className="mt-1 text-lg font-bold text-slate-100">{profile.name}</div>
-          <div className="mt-1 text-xs text-slate-500">
-            First seen {clock(profile.firstSeenAt)} · Last event {timeAgo(profile.lastEventAt)}
-          </div>
-        </div>
-        <TierBadge tier={profile.riskTier} />
-      </div>
-
-      {/* Review status bar */}
-      <div
-        className={`mt-4 flex items-center justify-between rounded-lg px-4 py-3 ${
-          isOverdue
-            ? 'bg-rose-500/10 ring-1 ring-rose-500/20'
-            : 'bg-slate-800/40'
-        }`}
-      >
-        <div>
-          <div className="text-xs font-semibold uppercase text-slate-500">Next review due</div>
-          <div className="mt-0.5">
-            <ReviewDueLabel isoDate={profile.nextReviewDue} />
-          </div>
-        </div>
-        <div className="text-right">
-          <div className="text-xs font-semibold uppercase text-slate-500">Last reviewed</div>
-          <div className="mt-0.5 text-xs text-slate-400">
-            {profile.lastReviewedAt
-              ? `${timeAgo(profile.lastReviewedAt)} by ${profile.lastReviewedBy}`
-              : 'Never'}
-          </div>
-        </div>
-      </div>
-
-      {/* Risk metrics */}
-      <div className="mt-4 grid grid-cols-4 gap-2">
-        {[
-          { label: 'Transactions', value: profile.totalTransactions, color: 'text-slate-200' },
-          { label: 'Alerts',       value: profile.totalAlerts,       color: profile.totalAlerts > 0 ? 'text-amber-300' : 'text-slate-200' },
-          { label: 'Media hits',   value: profile.totalMediaHits,    color: profile.totalMediaHits > 0 ? 'text-orange-300' : 'text-slate-200' },
-          { label: 'Sanctions',    value: profile.sanctionsHits,     color: profile.sanctionsHits > 0 ? 'text-rose-300' : 'text-slate-200' },
-        ].map((m) => (
-          <div key={m.label} className="rounded-lg bg-slate-800/40 p-3 text-center">
-            <div className={`text-xl font-bold ${m.color}`}>{m.value}</div>
-            <div className="mt-0.5 text-xs text-slate-500">{m.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Tier history timeline */}
-      <div className="mt-5">
-        <div className="mb-2 text-xs font-semibold uppercase text-slate-500">
-          Risk tier history
-        </div>
-        {profile.tierHistory.length === 0 ? (
-          <p className="text-xs text-slate-600">No tier changes recorded — profile at initial Low tier.</p>
-        ) : (
-          <div className="max-h-52 space-y-1.5 overflow-y-auto">
-            {profile.tierHistory.map((e, i) => (
-              <div key={i} className="flex items-start gap-3 rounded-lg bg-slate-900/60 px-3 py-2">
-                <div className="mt-0.5 flex shrink-0 items-center gap-1.5">
-                  <TierBadge tier={e.fromTier} />
-                  <span className="text-xs text-slate-600">→</span>
-                  <TierBadge tier={e.toTier} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs text-slate-300">{e.trigger}</p>
-                  <p className="text-xs text-slate-600">{timeAgo(e.timestamp)}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Human review gate */}
-      <div className="mt-5 border-t border-slate-800 pt-4">
-        <div className="mb-2 text-xs font-semibold uppercase text-slate-500">Mark as reviewed</div>
-        <p className="mb-3 text-xs text-slate-500">
-          Automated events can only raise the risk tier. A human review is required to confirm or
-          downgrade it. This action is logged to the immutable audit trail.
-        </p>
-        <div className="flex items-center gap-2">
-          <select
-            value={selectedTier}
-            onChange={(e) => setSelectedTier(e.target.value as CustomerRiskTier)}
-            className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-sky-500"
-          >
-            {TIER_ORDER.map((t) => (
-              <option key={t} value={t}>
-                {t.charAt(0).toUpperCase() + t.slice(1)}
-              </option>
-            ))}
-          </select>
-          <Button variant="primary" onClick={() => onReview(selectedTier)}>
-            Confirm review
-          </Button>
-          {isOverdue && (
-            <span className="text-xs text-rose-400">Review overdue — action required</span>
-          )}
-        </div>
-      </div>
-    </Card>
-  )
-}
-
-// ── Page ─────────────────────────────────────────────────────────────────────
-
-const REVIEW_DAYS: Record<CustomerRiskTier, number> = {
-  critical: 30, high: 90, medium: 180, low: 365,
+/** CSV format type used internally */
+interface CustomerRiskProfile {
+  name: string
+  riskLevel: 'Low' | 'Medium' | 'High' | 'Critical'
+  totalTransactions: number
+  flaggedTransactions: number
+  adverseMediaHits: number
+  sanctionsMatches: number
+  lastActivityTimestamp: string
 }
 
 export default function CustomerRiskProfiles() {
-  const customers      = useStore((s) => s.customers)
-  const reviewCustomer = useStore((s) => s.reviewCustomer)
+  const transactions = useStore((s) => s.transactions)
+  const alerts = useStore((s) => s.alerts)
+  const mediaHits = useStore((s) => s.mediaHits)
 
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [tierFilter, setTierFilter] = useState<CustomerRiskTier | 'all' | 'overdue'>('all')
+  // Extract unique customer names from transactions
+  const customerNames = Array.from(new Set(transactions.map(t => t.originator)))
 
-  const now = Date.now()
+  // Compute risk profiles
+  const profiles = customerNames.map(name => computeCustomerRiskProfile(
+    name, transactions, alerts, mediaHits
+  ))
 
-  const sorted = [...customers].sort((a, b) => {
-    const ti = TIER_ORDER.indexOf(a.riskTier) - TIER_ORDER.indexOf(b.riskTier)
-    if (ti !== 0) return ti
-    return new Date(b.lastEventAt).getTime() - new Date(a.lastEventAt).getTime()
-  })
-
-  const filtered = sorted.filter((c) => {
-    if (tierFilter === 'all') return true
-    if (tierFilter === 'overdue') return new Date(c.nextReviewDue).getTime() < now
-    return c.riskTier === tierFilter
-  })
-
-  const current = filtered.find((c) => c.id === selectedId) ?? filtered[0]
-
-  const overdueCount  = customers.filter((c) => new Date(c.nextReviewDue).getTime() < now).length
-  const criticalCount = customers.filter((c) => c.riskTier === 'critical').length
-  const highCount     = customers.filter((c) => c.riskTier === 'high').length
+  // Helper to handle risk level color
+  const riskColor = (level: 'Low' | 'Medium' | 'High' | 'Critical'): string => {
+    switch (level) {
+      case 'Low': return 'bg-emerald-200 text-emerald-800';
+      case 'Medium': return 'bg-amber-200 text-amber-800';
+      case 'High': return 'bg-amber-200 text-amber-800';
+      case 'Critical': return 'bg-red-200 text-red-800';
+      default: return 'bg-slate-200 text-slate-800';
+    }
+  }
 
   return (
     <div>
       <PageHeader title="Customer Risk Profiles" zone="Governance">
-        <span className="flex items-center gap-1.5 rounded-lg bg-sky-600/10 px-3 py-1.5 text-xs font-medium text-sky-300 ring-1 ring-sky-500/20">
-          Perpetual KYC · event-driven
+        <span className="text-xs text-slate-400">
+          Shows Perpetual KYC dashboard for sanctioned and high‑risk entities
         </span>
       </PageHeader>
 
-      <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Stat label="Tracked customers" value={customers.length}  sub="from live feed" />
-        <Stat label="Critical"          value={criticalCount}     accent="text-rose-400"   sub="30-day review" />
-        <Stat label="High"              value={highCount}         accent="text-orange-400" sub="90-day review" />
-        <Stat label="Reviews overdue"   value={overdueCount}      accent="text-amber-400"  sub="action required" />
-      </div>
-
-      {customers.length === 0 ? (
-        <Empty>
-          No customer profiles yet. Profiles are built automatically as transactions are ingested — ingest a few to get started.
-        </Empty>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[300px_1fr]">
-          {/* List */}
-          <div className="space-y-2">
-            {/* Filter tabs */}
-            <div className="flex flex-wrap gap-1 rounded-lg bg-slate-900/60 p-1">
-              {(['all', 'critical', 'high', 'medium', 'low', 'overdue'] as const).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setTierFilter(f)}
-                  className={`flex-1 rounded px-1.5 py-1 text-xs font-medium transition ${
-                    tierFilter === f
-                      ? 'bg-sky-600 text-white'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {f === 'overdue' ? `Overdue (${overdueCount})` : f.charAt(0).toUpperCase() + f.slice(1)}
-                </button>
-              ))}
+      {/* Summary stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-6">
+        {profiles.map((p) => (
+          <div key={p.name} className="rounded-lg bg-slate-950/60 p-4 border border-slate-800">
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-block h-4 w-4 rounded-full ${riskColor(p.riskLevel)}`}
+                title={p.riskLevel}
+              />
+              <span className="ml-2 text-sm text-slate-300">{p.name}</span>
             </div>
-
-            <div className="max-h-[65vh] space-y-1.5 overflow-y-auto pr-0.5">
-              {filtered.length === 0 && (
-                <p className="py-6 text-center text-sm text-slate-600">No customers in this filter.</p>
-              )}
-              {filtered.map((c) => {
-                const isOverdue = new Date(c.nextReviewDue).getTime() < now
-                return (
-                  <button
-                    key={c.id}
-                    onClick={() => setSelectedId(c.id)}
-                    className={`w-full rounded-lg border p-3 text-left transition ${
-                      current?.id === c.id
-                        ? 'border-sky-500/50 bg-sky-600/10'
-                        : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm font-semibold text-slate-200">{c.name}</span>
-                      <TierBadge tier={c.riskTier} />
-                    </div>
-                    {/* Mini risk bar */}
-                    <div className="mt-2 h-1 w-full rounded-full bg-slate-800">
-                      <div
-                        className={`h-1 rounded-full ${TIER_BAR[c.riskTier]}`}
-                        style={{ width: `${({ critical: 100, high: 75, medium: 50, low: 25 })[c.riskTier]}%` }}
-                      />
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                      <span>{c.totalTransactions}tx · {c.totalAlerts} alerts</span>
-                      {isOverdue
-                        ? <span className="font-semibold text-rose-400">Review overdue</span>
-                        : <span>Review in {Math.max(0, Math.round((new Date(c.nextReviewDue).getTime() - now) / 86_400_000))}d</span>
-                      }
-                    </div>
-                  </button>
-                )
-              })}
+            <div className="mt-2 text-sm text-slate-400">
+              Transactions:{' '}
+              {p.totalTransactions}
+            </div>
+            <div className="mt-1 text-sm text-slate-400">
+              Flagged:{' '}
+              {p.flaggedTransactions}
+            </div>
+            <div className="mt-1 text-sm text-slate-400">
+              Adverse Media:{' '}
+              {p.adverseMediaHits}
+            </div>
+            <div className="mt-1 text-sm text-slate-400">
+              Sanctions:{' '}
+              {p.sanctionsMatches}
             </div>
           </div>
+        ))}
+      </div>
 
-          {/* Detail */}
-          {current && (
-            <CustomerDetail
-              key={current.id}
-              profile={current}
-              onReview={(newTier) => reviewCustomer(current.id, newTier)}
-            />
-          )}
-        </div>
-      )}
-
-      {/* Review cadence reference */}
-      <div className="mt-6 rounded-lg border border-slate-800 bg-slate-900/40 p-4">
-        <div className="mb-2 text-xs font-semibold uppercase text-slate-500">Review cadence</div>
-        <div className="flex flex-wrap gap-4">
-          {TIER_ORDER.map((t) => (
-            <div key={t} className="flex items-center gap-2">
-              <TierBadge tier={t} />
-              <span className="text-xs text-slate-400">every {REVIEW_DAYS[t]} days</span>
-            </div>
-          ))}
-        </div>
+      {/* Detailed profile table */}
+      <div className="mt-6 space-y-4">
+        <table className="min-w-full bg-slate-950/60 rounded-lg border border-slate-800 p-4">
+          <thead className="text-slate-300">
+            <tr>
+              <th className="px-2 py-1 text-sm font-medium">Customer</th>
+              <th className="px-2 py-1 text-sm font-medium">Risk</th>
+              <th className="px-2 py-1 text-sm font-medium align-right">Transactions</th>
+              <th className="px-2 py-1 text-sm font-medium align-right">Flagged</th>
+              <th className="px-2 py-1 text-sm font-medium align-right">Media Hits</th>
+              <th className="px-2 py-1 text-sm font-medium align-right">Sanctions</th>
+              <th className="px-2 py-1 text-sm font-medium align-right">Last Activity</th>
+            </tr>
+          </thead>
+          <tbody className="text-slate-200 text-sm">
+            {profiles.map((p) => (
+              <tr key={p.name}>
+                <td className="px-4 py-2">{p.name}</td>
+                <td className="px-4 py-2 font-medium">{p.riskLevel}</td>
+                <td className="px-4 py-2 align-right">{p.totalTransactions}</td>
+                <td className="px-4 py-2 align-right">{p.flaggedTransactions}</td>
+                <td className="px-4 py-2 align-right">{p.adverseMediaHits}</td>
+                <td className="px-4 py-2 align-right">{p.sanctionsMatches}</td>
+                <td className="px-4 py-2 text-sm">{p.lastActivityTimestamp}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )
