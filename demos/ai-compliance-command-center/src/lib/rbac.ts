@@ -36,7 +36,7 @@ export const ROLES: RoleDefinition[] = [
     role: 'executive',
     label: 'Executive / MLRO',
     description: 'Oversees program KPIs and the immutable audit trail.',
-    permissions: ['/executive', '/kyc', '/audit'],
+    permissions: ['/executive', '/kyc', '/customer-risk-profiles', '/audit'],
   },
 ]
 
