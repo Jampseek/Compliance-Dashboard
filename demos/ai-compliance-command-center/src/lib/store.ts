@@ -14,13 +14,14 @@
 // so the demo runs with zero backend setup.
 
 import { create } from 'zustand'
-import type { AdverseMediaHit, Alert, AuditEntry, Case, CustomerProfile, CustomerRiskTier, CustomerTierEvent, EddReport, KycRegulator, KycReport, Transaction } from './types'
+import type { AdverseMediaHit, AiUsageRecord, AiUseCase, Alert, AuditEntry, Case, CustomerProfile, CustomerRiskTier, CustomerTierEvent, EddReport, KycRegulator, KycReport, Transaction } from './types'
 import { makeMediaHit, makeTransaction } from './mockData'
 import { screen } from './screening'
 import { assess } from './riskEngine'
 import { draftSarAI } from './aiSarDrafter'
 import { draftEdd } from './aiEddDrafter'
 import { generateOsintFindings } from './osintData'
+import { DEFAULT_ALLOCATIONS, DEFAULT_BUDGET_CAPS, estimateTriageUsage, monthKey } from './aiGateway'
 import { appendAudit } from './audit'
 import { id } from './random'
 import { PRINCIPALS, type Role } from './rbac'
@@ -206,6 +207,26 @@ interface PipelineStats {
   autoCleared: number
 }
 
+/** Aggregated AI spend for one 'YYYY-MM' window. */
+export interface MonthlyAiSpend {
+  byRole: Record<Role, number>       // REAL spend only — drives cap enforcement
+  byUseCase: Record<AiUseCase, number> // real + simulated (allocation dashboard)
+  simulated: number
+  total: number
+}
+
+const emptyMonthSpend = (): MonthlyAiSpend => ({
+  byRole: { analyst: 0, investigator: 0, executive: 0 },
+  byUseCase: {
+    investigative_drafting: 0,
+    triage_automation: 0,
+    analysis_reporting: 0,
+    experimentation: 0,
+  },
+  simulated: 0,
+  total: 0,
+})
+
 interface State {
   role: Role
   transactions: Transaction[]
@@ -217,6 +238,15 @@ interface State {
   customers: CustomerProfile[]
   audit: AuditEntry[]
   stats: PipelineStats
+
+  // AI governance
+  aiUsage: AiUsageRecord[]
+  aiSpend: Record<string, MonthlyAiSpend>       // key: 'YYYY-MM'
+  budgetCaps: Record<Role, number>
+  useCaseAllocations: Record<AiUseCase, number> // percentages, sum 100
+  recordAiUsage: (r: Omit<AiUsageRecord, 'id' | 'month'>) => void
+  setBudgetCap: (role: Role, capUsd: number) => void
+  setUseCaseAllocation: (alloc: Record<AiUseCase, number>) => void
 
   setRole: (r: Role) => void
   ingest: () => void
@@ -256,8 +286,76 @@ export const useStore = create<State>((set, get) => ({
   sarDraftingCaseId: null,
   eddDraftingHitId: null,
   aiCallsInFlight: 0,
+  aiUsage: [],
+  aiSpend: {},
+  budgetCaps: { ...DEFAULT_BUDGET_CAPS },
+  useCaseAllocations: { ...DEFAULT_ALLOCATIONS },
 
   setRole: (r) => set({ role: r }),
+
+  recordAiUsage: (r) => {
+    set((s) => {
+      const month = monthKey()
+      const record: AiUsageRecord = { ...r, id: id('aiuse'), month }
+
+      const prev = s.aiSpend[month] ?? emptyMonthSpend()
+      const spend: MonthlyAiSpend = {
+        byRole: { ...prev.byRole },
+        byUseCase: { ...prev.byUseCase },
+        simulated: prev.simulated,
+        total: prev.total,
+      }
+      if (record.simulated) {
+        spend.simulated += record.costUsd
+      } else if (!record.blocked && record.role !== 'system') {
+        spend.byRole[record.role] += record.costUsd
+      }
+      spend.byUseCase[record.useCase] += record.costUsd
+      spend.total += record.costUsd
+
+      const audit = [...s.audit]
+      // Simulated triage records skip the audit chain (feed fires every 1.5s —
+      // alert_triaged already covers those events).
+      if (!record.simulated) {
+        if (record.blocked === 'budget_cap') {
+          audit.push(appendAudit(audit, 'budget_cap_reached', record.actor, record.model, `${record.taskCategory} blocked — monthly cap for ${record.role}`, record.timestamp))
+        } else if (record.blocked === 'policy') {
+          audit.push(appendAudit(audit, 'ai_policy_blocked', record.actor, record.model, `${record.taskCategory} blocked — tier not permitted for ${record.role}`, record.timestamp))
+        } else {
+          audit.push(appendAudit(audit, 'ai_call_completed', record.actor, record.model, `${record.taskCategory} via ${record.provider} — ${record.inputTokens}+${record.outputTokens} tok, $${record.costUsd.toFixed(4)}`, record.timestamp))
+        }
+      }
+
+      return {
+        aiUsage: [record, ...s.aiUsage].slice(0, 500),
+        aiSpend: { ...s.aiSpend, [month]: spend },
+        audit,
+      }
+    })
+  },
+
+  setBudgetCap: (role, capUsd) => {
+    const actor = PRINCIPALS[get().role].name
+    set((s) => {
+      const ts = new Date().toISOString()
+      const audit = [...s.audit]
+      audit.push(appendAudit(audit, 'ai_budget_updated', actor, role, `monthly cap set to $${capUsd.toLocaleString()}`, ts))
+      return {
+        budgetCaps: { ...s.budgetCaps, [role]: capUsd },
+        audit,
+      }
+    })
+  },
+
+  setUseCaseAllocation: (alloc) => {
+    const actor = PRINCIPALS[get().role].name
+    set((s) => {
+      const ts = new Date().toISOString()
+      const audit = [...s.audit]
+      audit.push(appendAudit(audit, 'ai_budget_updated', actor, 'use-case-allocation', Object.entries(alloc).map(([k, v]) => `${k}=${v}%`).join(' '), ts))
+      return { useCaseAllocations: { ...alloc }, audit }
+    })
+  },
 
   ingest: () => {
     const now = Date.now()
@@ -385,6 +483,12 @@ export const useStore = create<State>((set, get) => ({
         audit,
       }
     })
+
+    // Governance: log the (deterministic) Semantic Kernel triage as a simulated
+    // routine-tier usage record so the AI Governance dashboard reflects volume.
+    if (assessment.band !== 'low') {
+      get().recordAiUsage(estimateTriageUsage())
+    }
   },
 
   clearAlert: (alertId) => {
@@ -440,7 +544,7 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({ sarDraftingCaseId: caseId, aiCallsInFlight: s.aiCallsInFlight + 1 }))
     try {
       const now = Date.now()
-      const sar = await draftSarAI(c, now, regulator)
+      const sar = await draftSarAI(c, now, regulator, get().role)
       const str = makeStr(c, now)
       const ts = new Date(now).toISOString()
       set((s) => {
@@ -596,7 +700,7 @@ export const useStore = create<State>((set, get) => ({
         audit.push(appendAudit(audit, 'edd_initiated', actor, hitId, `OSINT scan — ${hit.entityName}`, ts))
         return { audit }
       })
-      const report = await draftEdd(hit, findings, actor, now)
+      const report = await draftEdd(hit, findings, actor, now, state.role)
       set((s) => {
         const audit = [...s.audit]
         audit.push(appendAudit(audit, 'edd_drafted', 'system:edd-ai', report.id, `${hit.entityName} — ${report.riskRating}`, ts))
@@ -714,5 +818,9 @@ export const useStore = create<State>((set, get) => ({
       audit: [],
       stats: { ingested: 0, autoCleared: 0 },
       aiCallsInFlight: 0,
+      aiUsage: [],
+      aiSpend: {},
+      budgetCaps: { ...DEFAULT_BUDGET_CAPS },
+      useCaseAllocations: { ...DEFAULT_ALLOCATIONS },
     }),
 }))
