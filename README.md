@@ -64,8 +64,6 @@ graph TD
 |--------|------|-------------------|
 | **Kelly Howell** | Project Lead & AML Domain Expert | Leads project structure, sprint planning, and task coordination. Brings real-world AML compliance knowledge from industry experience. Owns discovery, stakeholder interviews, and AI Innovation Map. |
 | **Sadia Mehmood** | Tech Lead — Architecture, Integration & Governance | Leads system architecture, tech stack design, integration requirements, and governance framework. Drives executive presentation strategy and responsible AI principles. |
-| **Ghondi Claude** | Research & Workflow Analyst | Supports workflow architecture research, process mapping, and use case analysis across the compliance lifecycle. |
-| **Henok** | Analyst & Innovation Mapper | Leads feasibility and impact scoring of AI use cases. Owns the AI Innovation Map visualisation and opportunity matrix. |
 
 ---
 
@@ -73,12 +71,12 @@ graph TD
 
 | # | Deliverable | Description | Status |
 |---|-------------|-------------|--------|
-| 1 | AI Innovation Map | Future-state AI transformation strategy | 🔄 In Progress |
-| 2 | End-to-End Workflow Architecture | AI-enabled compliance workflow ecosystem | 🔄 In Progress |
-| 3 | Human Governance Model | Human-centered governance framework | ⏳ Not Started |
-| 4 | AI Agent Demo + Executive Presentation | Prototype demo and executive pitch | ⏳ Not Started |
-| 5 | AI Workflow Prompt Library | Prompt library supporting AI workflow design | ⏳ Not Started |
-| 6 | Final Presentation | Capstone pitch and submission | ⏳ Not Started |
+| 1 | AI Innovation Map | Future-state AI transformation strategy | Done |
+| 2 | End-to-End Workflow Architecture | AI-enabled compliance workflow ecosystem | Done |
+| 3 | Human Governance Model | Human-centered governance framework | Done |
+| 4 | AI Agent Demo + Executive Presentation | Prototype demo and executive pitch | Done |
+| 5 | AI Workflow Prompt Library | Prompt library supporting AI workflow design | Done |
+| 6 | Final Presentation | Capstone pitch and submission | Done |
 
 ---
 
@@ -128,11 +126,11 @@ Compliance-Dashboard/
 
 - [ ] **@KellyHowell** — Complete current-state assessment and stakeholder interview notes
 - [ ] **@KellyHowell** — Finalise AI Use Case Register
-- [ ] **@Henok** — Complete scoring matrix and AI Innovation Map v1.0
+- [ ] **@KellyHowell** — Complete scoring matrix and AI Innovation Map v1.0
 - [ ] **@SadiaMehmood** — Set up GitHub repository structure and documentation
 - [ ] **@SadiaMehmood** — Complete integration requirements register
 - [ ] **@SadiaMehmood** — Design technology layer and tech stack diagram
-- [ ] **@GhondiClaude** — Support workflow architecture research and process mapping
+- [ ] **@SadiaMehmood** — Support workflow architecture research and process mapping
 - [ ] **All** — Attend Progress Meeting 1 on June 6 with initial concepts and questions
 
 ---
