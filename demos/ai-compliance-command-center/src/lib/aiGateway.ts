@@ -42,7 +42,7 @@ export const MODEL_TIERS: Record<ModelTier, TierSpec> = {
   complex: {
     tier: 'complex',
     label: 'Complex reasoning',
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-5',
     inputPerMTok: 3,
     outputPerMTok: 15,
     typicalCost: '~$0.02–0.10 / task',
@@ -169,12 +169,21 @@ let cachedClient: LiveClient | null | undefined
 function resolveClient(): LiveClient | null {
   if (cachedClient !== undefined) return cachedClient
 
+  // SECURITY: any VITE_-prefixed var is inlined into the client bundle at build
+  // time and is therefore readable by anyone who loads the deployed page. These
+  // keys must ONLY be set for local development; the public demo must run on the
+  // stub (no credentials). For a real deployment, proxy model calls through a
+  // server/edge function that holds the key instead of shipping it to the browser.
+  //
+  // withRetry() owns retry/backoff for these calls, so the SDK's own retry layer
+  // is disabled (maxRetries: 0) to avoid stacking two independent retry loops.
   const foundryBase = import.meta.env.VITE_ANTHROPIC_FOUNDRY_BASE_URL
   const foundryKey = import.meta.env.VITE_ANTHROPIC_FOUNDRY_API_KEY
   if (foundryBase && foundryKey) {
     const client = new AnthropicFoundry({
       baseURL: foundryBase,
       apiKey: foundryKey,
+      maxRetries: 0,
       dangerouslyAllowBrowser: true,
     })
     cachedClient = { provider: 'foundry', create: (p) => client.messages.create(p) }
@@ -183,7 +192,7 @@ function resolveClient(): LiveClient | null {
 
   const anthropicKey = import.meta.env.VITE_ANTHROPIC_API_KEY
   if (anthropicKey) {
-    const client = new Anthropic({ apiKey: anthropicKey, dangerouslyAllowBrowser: true })
+    const client = new Anthropic({ apiKey: anthropicKey, maxRetries: 0, dangerouslyAllowBrowser: true })
     cachedClient = { provider: 'anthropic', create: (p) => client.messages.create(p) }
     return cachedClient
   }
@@ -287,7 +296,12 @@ export async function invokeModel(req: GatewayRequest): Promise<GatewayResponse>
   }
   const latencyMs = Math.round(performance.now() - started)
 
-  const text = message.content[0]?.type === 'text' ? message.content[0].text : ''
+  // Concatenate every text block — a response may lead with a non-text block
+  // (e.g. a thinking block), so reading only content[0] can drop the answer.
+  const text = message.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
   const inputTokens = message.usage.input_tokens
   const outputTokens = message.usage.output_tokens
   const costUsd =

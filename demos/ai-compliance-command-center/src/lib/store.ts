@@ -250,6 +250,7 @@ interface State {
 
   setRole: (r: Role) => void
   ingest: () => void
+  fetchTransactionsFromApi: () => Promise<void>
   clearAlert: (alertId: string) => void
   escalateAlert: (alertId: string) => void
   addNote: (caseId: string, note: string) => void
@@ -488,6 +489,18 @@ export const useStore = create<State>((set, get) => ({
     // routine-tier usage record so the AI Governance dashboard reflects volume.
     if (assessment.band !== 'low') {
       get().recordAiUsage(estimateTriageUsage())
+    }
+  },
+
+  fetchTransactionsFromApi: async () => {
+    try {
+      const response = await fetch('http://localhost:5082/api/transactions')
+      if (!response.ok) throw new Error('Network error')
+      const data = await response.json()
+      set((s) => ({ ...s, transactions: data }))
+    } catch (error) {
+      console.error('Failed to fetch transactions from API:', error)
+      // keep existing mock data (no state change)
     }
   },
 
